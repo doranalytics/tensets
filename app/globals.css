@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #07070b;
+  --panel: #0e0e16;
+  --line: #1d1d2b;
+  --ink: #e8e8f2;
+  --sub: #8b8ba3;
+  --faint: #4c4c63;
+  --accent: #7c5cff;
+  --accent-2: #4c9eff;
+  --good: #34d399;
+  --warn: #f59e0b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-sub: var(--sub);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+html {
+  background: var(--bg);
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans, ui-sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The tensets wordmark — same futuristic display face family as cortex. */
+.wordmark {
+  font-family: var(--font-orbitron), var(--font-geist-mono), monospace;
+  letter-spacing: 0.08em;
+}
+
+/* Soft glow used on the body figure and progress accents. */
+.glow {
+  filter: drop-shadow(0 0 6px rgba(124, 92, 255, 0.55));
+}
+
+@keyframes tensets-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+
+/* Row flash when jumped to from the body view. */
+@keyframes tensets-flash {
+  0% { background-color: rgba(124, 92, 255, 0.22); }
+  100% { background-color: transparent; }
+}
+.row-flash {
+  animation: tensets-flash 1.2s ease-out 1;
+}
