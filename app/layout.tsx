@@ -20,6 +20,12 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable} ${orbitron.variable}`}>
+      <head>
+        {/* DXYZ Dashboard beacon — unique-visitor counting, no cookies.
+            Same first-party ledger as the other dxyz apps; the dashboard
+            picks up the "tensets" slug automatically. */}
+        <script defer src="https://dxyz-dashboard.vercel.app/d/tensets.js" />
+      </head>
       <body>{children}</body>
     </html>
   );
