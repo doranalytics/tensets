@@ -1,56 +1,105 @@
 "use client";
-// tensets — the whole theory of growth in one number. Every body part
-// needs 10 sets to failure a week; past 20 the returns diminish. Rows to
-// log, a body that lights up, nothing else.
+// tensets — 10 sets to failure per body part per week; past 20 the returns
+// diminish. Rows to log, a 3D body that lights up, weeks you start
+// yourself. No aggregate vanity numbers: the only stat that matters is
+// sets per body part.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BodyFigure } from "./body";
-import { CEILING, FLOOR, GROUPS, MUSCLES, MuscleKey, daysToReset, weekKey } from "./muscles";
+import dynamic from "next/dynamic";
+import { CEILING, FLOOR, GROUPS, MUSCLES, MuscleKey } from "./muscles";
+
+// three.js only loads when the body view is opened.
+const Body3D = dynamic(() => import("./body3d").then((m) => m.Body3D), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-[62vh] min-h-[380px] items-center justify-center">
+      <p className="font-mono text-[11px] uppercase tracking-wider text-faint">loading the body…</p>
+    </div>
+  ),
+});
 
 type Counts = Partial<Record<MuscleKey, number>>;
+interface Week {
+  startedAt: string; // ISO date
+  counts: Counts;
+}
 interface Store {
-  weeks: Record<string, Counts>;
+  version: 2;
   sex: "m" | "f";
+  theme: "dark" | "light";
+  week: Week | null; // null until the user starts one
+  history: Week[]; // finished weeks, newest first
 }
 
 const LS_KEY = "tensets.v1";
 
+/** Load the store, migrating v1 (auto-week map, single "delts") in place. */
 function load(): Store {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) return JSON.parse(raw) as Store;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.version === 2) return parsed as Store;
+      // v1 → v2: the newest auto-week becomes the active week; "delts"
+      // counts land on side delts.
+      const weeks: Record<string, Counts> = parsed.weeks ?? {};
+      const keys = Object.keys(weeks).sort();
+      const migrate = (c: Counts & { delts?: number }): Counts => {
+        const { delts, ...rest } = c;
+        return delts ? { ...rest, "side-delts": delts } : rest;
+      };
+      const latest = keys.at(-1);
+      return {
+        version: 2,
+        sex: parsed.sex ?? "m",
+        theme: "dark",
+        week: latest ? { startedAt: new Date().toISOString(), counts: migrate(weeks[latest]) } : null,
+        history: keys.slice(0, -1).map((k) => ({ startedAt: k, counts: migrate(weeks[k]) })),
+      };
+    }
   } catch {}
-  return { weeks: {}, sex: "m" };
+  return { version: 2, sex: "m", theme: "dark", week: null, history: [] };
 }
 
-function prevWeekKey(now = new Date()): string {
-  const d = new Date(now);
-  d.setDate(d.getDate() - 7);
-  return weekKey(d);
+function fmtDay(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function dayOf(iso: string): number {
+  return Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) + 1);
 }
 
 export default function Home() {
   const [store, setStore] = useState<Store | null>(null);
   const [view, setView] = useState<"log" | "body">("log");
-  const [side, setSide] = useState<"front" | "back">("front");
   const [flash, setFlash] = useState<MuscleKey | null>(null);
+  const [confirmNew, setConfirmNew] = useState(false);
   const rowRefs = useRef<Partial<Record<MuscleKey, HTMLDivElement | null>>>({});
 
-  const wk = weekKey();
   useEffect(() => setStore(load()), []);
   useEffect(() => {
-    if (store) localStorage.setItem(LS_KEY, JSON.stringify(store));
+    if (!store) return;
+    localStorage.setItem(LS_KEY, JSON.stringify(store));
+    document.documentElement.dataset.theme = store.theme;
   }, [store]);
 
-  const counts: Counts = useMemo(() => store?.weeks[wk] ?? {}, [store, wk]);
-  const lastWeek: Counts = useMemo(() => store?.weeks[prevWeekKey()] ?? {}, [store]);
+  const counts: Counts = useMemo(() => store?.week?.counts ?? {}, [store]);
+  const lastWeek: Counts = useMemo(() => store?.history[0]?.counts ?? {}, [store]);
 
   const bump = (key: MuscleKey, delta: number) => {
     setStore((s) => {
-      if (!s) return s;
-      const cur = s.weeks[wk]?.[key] ?? 0;
-      const next = Math.max(0, cur + delta);
-      return { ...s, weeks: { ...s.weeks, [wk]: { ...s.weeks[wk], [key]: next } } };
+      if (!s?.week) return s;
+      const next = Math.max(0, (s.week.counts[key] ?? 0) + delta);
+      return { ...s, week: { ...s.week, counts: { ...s.week.counts, [key]: next } } };
     });
+  };
+
+  const startWeek = () => {
+    setStore((s) => {
+      if (!s) return s;
+      const history = s.week ? [s.week, ...s.history] : s.history;
+      return { ...s, week: { startedAt: new Date().toISOString(), counts: {} }, history };
+    });
+    setConfirmNew(false);
   };
 
   const jumpTo = (key: MuscleKey) => {
@@ -64,7 +113,7 @@ export default function Home() {
 
   if (!store) {
     return (
-      <main className="mx-auto max-w-xl px-5 py-10">
+      <main className="mx-auto max-w-xl px-4 py-10 sm:px-5">
         <div className="h-8 w-36 animate-pulse rounded bg-panel" />
         <div className="mt-8 space-y-3">
           {[0, 1, 2, 3, 4, 5].map((i) => (
@@ -75,186 +124,212 @@ export default function Home() {
     );
   }
 
-  const total = MUSCLES.reduce((n, m) => n + (counts[m.key] ?? 0), 0);
-  const atGoal = MUSCLES.filter((m) => (counts[m.key] ?? 0) >= FLOOR).length;
-  const reset = daysToReset();
   const progress: Partial<Record<MuscleKey, number>> = {};
   for (const m of MUSCLES) progress[m.key] = Math.min((counts[m.key] ?? 0) / FLOOR, 1);
 
   return (
-    <main className="mx-auto max-w-xl px-5 pb-24 pt-8">
+    <main className="mx-auto max-w-xl px-4 pb-24 pt-6 sm:px-5 sm:pt-8">
       {/* Header */}
-      <header className="flex items-end justify-between">
+      <header className="flex items-start justify-between gap-3">
         <div>
           <h1 className="wordmark text-2xl lowercase text-ink">
             ten<span style={{ color: "var(--accent)" }}>sets</span>
           </h1>
           <p className="mt-1 font-mono text-[11px] uppercase tracking-wider text-sub">
-            {wk} · resets in {reset} day{reset === 1 ? "" : "s"}
+            {store.week
+              ? `week of ${fmtDay(store.week.startedAt)} · day ${dayOf(store.week.startedAt)}`
+              : "no week running"}
           </p>
         </div>
-        <div className="text-right">
-          <p className="font-mono text-2xl font-semibold text-ink">
-            {atGoal}
-            <span className="text-faint">/{MUSCLES.length}</span>
-          </p>
-          <p className="font-mono text-[11px] uppercase tracking-wider text-sub">parts at 10</p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setStore((s) => (s ? { ...s, theme: s.theme === "dark" ? "light" : "dark" } : s))}
+            title={store.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label="Toggle light / dark"
+            className="flex size-9 items-center justify-center rounded-full border border-line text-sub transition-colors hover:text-ink"
+          >
+            {store.theme === "dark" ? "☾" : "☀"}
+          </button>
+          {store.week &&
+            (confirmNew ? (
+              <span className="flex items-center gap-1.5">
+                <button
+                  onClick={startWeek}
+                  className="rounded-full px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-white"
+                  style={{ background: "var(--accent)" }}
+                >
+                  archive &amp; start
+                </button>
+                <button
+                  onClick={() => setConfirmNew(false)}
+                  className="rounded-full border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-sub"
+                >
+                  keep going
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={() => setConfirmNew(true)}
+                title="Archive this week and start fresh"
+                className="rounded-full border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-sub transition-colors hover:text-ink"
+              >
+                new week
+              </button>
+            ))}
         </div>
       </header>
 
-      {/* View toggle */}
-      <div className="mt-6 flex items-center justify-between">
-        <div className="flex overflow-hidden rounded-full border border-line">
-          {(["log", "body"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className="px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-colors"
-              style={{
-                background: view === v ? "var(--ink)" : "transparent",
-                color: view === v ? "var(--bg)" : "var(--sub)",
-              }}
-            >
-              {v}
-            </button>
-          ))}
+      {!store.week ? (
+        /* No week yet — the app waits for you, it never resets itself. */
+        <div className="mt-10 flex flex-col items-center rounded-2xl border border-dashed border-line px-6 py-12 text-center">
+          <p className="wordmark text-lg text-ink">
+            10<span style={{ color: "var(--accent)" }}>/wk</span>
+          </p>
+          <p className="mt-3 max-w-sm text-sm text-sub">
+            Ten sets to failure per body part per week is where growth starts. Start a week, log every set with one
+            tap, and close it out when you&apos;re done — it only rolls over when you say so.
+          </p>
+          <button
+            onClick={startWeek}
+            className="mt-6 rounded-full px-6 py-3 font-mono text-xs uppercase tracking-wider text-white transition-transform active:scale-95"
+            style={{ background: "var(--accent)" }}
+          >
+            start my week
+          </button>
         </div>
-        {view === "body" ? (
-          <div className="flex items-center gap-2">
+      ) : (
+        <>
+          {/* View toggle */}
+          <div className="mt-6 flex items-center justify-between">
             <div className="flex overflow-hidden rounded-full border border-line">
-              {(["front", "back"] as const).map((s) => (
+              {(["log", "body"] as const).map((v) => (
                 <button
-                  key={s}
-                  onClick={() => setSide(s)}
-                  className="px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider"
+                  key={v}
+                  onClick={() => setView(v)}
+                  className="px-4 py-2 font-mono text-[11px] uppercase tracking-wider transition-colors"
                   style={{
-                    background: side === s ? "var(--panel)" : "transparent",
-                    color: side === s ? "var(--ink)" : "var(--sub)",
+                    background: view === v ? "var(--ink)" : "transparent",
+                    color: view === v ? "var(--bg)" : "var(--sub)",
                   }}
                 >
-                  {s}
+                  {v}
                 </button>
               ))}
             </div>
-            <button
-              onClick={() => setStore((s) => (s ? { ...s, sex: s.sex === "m" ? "f" : "m" } : s))}
-              title="Switch figure"
-              className="rounded-full border border-line px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-sub hover:text-ink"
-            >
-              {store.sex === "m" ? "♂" : "♀"}
-            </button>
+            {view === "body" && (
+              <button
+                onClick={() => setStore((s) => (s ? { ...s, sex: s.sex === "m" ? "f" : "m" } : s))}
+                title="Switch figure"
+                className="rounded-full border border-line px-3.5 py-2 font-mono text-[11px] uppercase tracking-wider text-sub hover:text-ink"
+              >
+                {store.sex === "m" ? "♂" : "♀"}
+              </button>
+            )}
           </div>
-        ) : (
-          <p className="font-mono text-[11px] text-faint">{total} sets this week</p>
-        )}
-      </div>
 
-      {total === 0 && view === "log" && (
-        <p className="mt-4 rounded-xl border border-dashed border-line px-4 py-3 text-sm text-sub">
-          Fresh week. Every tap of <span className="text-ink">+</span> is one set to failure — get every part to
-          10 before Monday.
-        </p>
-      )}
-
-      {view === "body" ? (
-        <section className="mt-6">
-          <BodyFigure view={side} sex={store.sex} progress={progress} onPick={jumpTo} />
-          <p className="mt-3 text-center font-mono text-[11px] uppercase tracking-wider text-faint">
-            dim → lit at 10 sets · tap a muscle to jump to its row
-            {side === "front" ? " · triceps, back & rear legs live on the back view" : ""}
-          </p>
-        </section>
-      ) : (
-        <section className="mt-6 space-y-7">
-          {GROUPS.map((group) => (
-            <div key={group}>
-              <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.2em] text-faint">{group}</h2>
-              <div className="overflow-hidden rounded-xl border border-line">
-                {MUSCLES.filter((m) => m.group === group).map((m, i) => {
-                  const n = counts[m.key] ?? 0;
-                  const over = n > FLOOR;
-                  const scale = over ? CEILING : FLOOR;
-                  const pct = Math.min(n / scale, 1) * 100;
-                  const last = lastWeek[m.key] ?? 0;
-                  return (
-                    <div
-                      key={m.key}
-                      ref={(el) => {
-                        rowRefs.current[m.key] = el;
-                      }}
-                      className={`relative flex items-center gap-3 px-4 py-3 ${i > 0 ? "border-t border-line" : ""} ${
-                        flash === m.key ? "row-flash" : ""
-                      }`}
-                      style={{ background: "var(--panel)" }}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <p className="truncate text-sm font-medium text-ink">{m.name}</p>
-                          <p className="font-mono text-xs text-sub">
-                            <span className={n >= FLOOR ? "text-good" : "text-ink"}>{n}</span>
-                            <span className="text-faint">/{over ? CEILING : FLOOR}</span>
-                            {last > 0 && <span className="ml-2 text-faint">last wk {last}</span>}
-                          </p>
-                        </div>
-                        {/* the bar: 0→10; past 10 it re-scales to 0→20 with a marker at 10 */}
-                        <div className="relative mt-2 h-1.5 overflow-hidden rounded-full" style={{ background: "var(--line)" }}>
-                          <div
-                            className="h-full rounded-full transition-all duration-300"
-                            style={{
-                              width: `${pct}%`,
-                              background:
-                                n >= CEILING
-                                  ? "var(--warn)"
-                                  : n >= FLOOR
-                                    ? "var(--good)"
-                                    : `linear-gradient(90deg, var(--accent-2), var(--accent))`,
-                              boxShadow: n >= FLOOR && n < CEILING ? "0 0 8px rgba(52,211,153,.5)" : undefined,
-                            }}
-                          />
-                          {over && (
+          {view === "body" ? (
+            <section className="mt-4">
+              <Body3D sex={store.sex} light={store.theme === "light"} progress={progress} onPick={jumpTo} />
+              <p className="mt-2 text-center font-mono text-[10px] uppercase tracking-wider text-faint">
+                drag to spin · dim → lit at 10 sets · tap a muscle for its row
+              </p>
+            </section>
+          ) : (
+            <section className="mt-6 space-y-7">
+              {GROUPS.map((group) => (
+                <div key={group}>
+                  <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.2em] text-faint">{group}</h2>
+                  <div className="overflow-hidden rounded-xl border border-line">
+                    {MUSCLES.filter((m) => m.group === group).map((m, i) => {
+                      const n = counts[m.key] ?? 0;
+                      const over = n > FLOOR;
+                      const scale = over ? CEILING : FLOOR;
+                      const pct = Math.min(n / scale, 1) * 100;
+                      const last = lastWeek[m.key] ?? 0;
+                      return (
+                        <div
+                          key={m.key}
+                          ref={(el) => {
+                            rowRefs.current[m.key] = el;
+                          }}
+                          className={`relative flex items-center gap-3 px-3.5 py-3 sm:px-4 ${
+                            i > 0 ? "border-t border-line" : ""
+                          } ${flash === m.key ? "row-flash" : ""}`}
+                          style={{ background: "var(--panel)" }}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <p className="truncate text-sm font-medium text-ink">{m.name}</p>
+                              <p className="font-mono text-xs text-sub">
+                                <span className={n >= FLOOR ? "text-good" : "text-ink"}>{n}</span>
+                                <span className="text-faint">/{over ? CEILING : FLOOR}</span>
+                                {last > 0 && <span className="ml-2 hidden text-faint sm:inline">last wk {last}</span>}
+                              </p>
+                            </div>
+                            {/* the bar: 0→10; past 10 it re-scales to 0→20 with a marker at 10 */}
                             <div
-                              className="absolute top-0 h-full w-px"
-                              style={{ left: "50%", background: "var(--bg)" }}
-                              title="10 — the growth floor"
-                            />
-                          )}
+                              className="relative mt-2 h-1.5 overflow-hidden rounded-full"
+                              style={{ background: "var(--line)" }}
+                            >
+                              <div
+                                className="h-full rounded-full transition-all duration-300"
+                                style={{
+                                  width: `${pct}%`,
+                                  background:
+                                    n >= CEILING
+                                      ? "var(--warn)"
+                                      : n >= FLOOR
+                                        ? "var(--good)"
+                                        : `linear-gradient(90deg, var(--accent-2), var(--accent))`,
+                                  boxShadow: n >= FLOOR && n < CEILING ? "0 0 8px rgba(52,211,153,.5)" : undefined,
+                                }}
+                              />
+                              {over && (
+                                <div
+                                  className="absolute top-0 h-full w-px"
+                                  style={{ left: "50%", background: "var(--bg)" }}
+                                  title="10 — the growth floor"
+                                />
+                              )}
+                            </div>
+                            {n >= CEILING && (
+                              <p className="mt-1 font-mono text-[10px] text-warn">past 20 — diminishing returns</p>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <button
+                              aria-label={`Remove a set from ${m.name}`}
+                              onClick={() => bump(m.key, -1)}
+                              disabled={n === 0}
+                              className="flex size-9 items-center justify-center rounded-full border border-line font-mono text-sub transition-colors hover:text-ink disabled:opacity-30"
+                            >
+                              −
+                            </button>
+                            <button
+                              aria-label={`Log one set to failure on ${m.name}`}
+                              title="+1 set to failure"
+                              onClick={() => bump(m.key, 1)}
+                              className="flex size-9 items-center justify-center rounded-full font-mono font-bold transition-transform active:scale-90"
+                              style={{ background: "var(--accent)", color: "#fff" }}
+                            >
+                              +
+                            </button>
+                          </div>
                         </div>
-                        {n >= CEILING && (
-                          <p className="mt-1 font-mono text-[10px] text-warn">past 20 — diminishing returns</p>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <button
-                          aria-label={`Remove a set from ${m.name}`}
-                          onClick={() => bump(m.key, -1)}
-                          disabled={n === 0}
-                          className="flex size-8 items-center justify-center rounded-full border border-line font-mono text-sub transition-colors hover:text-ink disabled:opacity-30"
-                        >
-                          −
-                        </button>
-                        <button
-                          aria-label={`Log one set to failure on ${m.name}`}
-                          title="+1 set to failure"
-                          onClick={() => bump(m.key, 1)}
-                          className="flex size-8 items-center justify-center rounded-full font-mono font-bold transition-transform active:scale-90"
-                          style={{ background: "var(--accent)", color: "#fff" }}
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </section>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
+        </>
       )}
 
       <footer className="mt-12 border-t border-line pt-5">
         <p className="text-xs leading-relaxed text-faint">
           The theory, whole: a muscle grows on ~10 sets to failure a week — fewer and it maintains, past ~20 the
-          returns diminish. Weeks reset Monday. Your log lives in this browser; nothing leaves it.
+          returns diminish. Weeks are yours to open and close. Your log lives in this browser; nothing leaves it.
         </p>
       </footer>
     </main>
