@@ -21,6 +21,7 @@ const svg = Buffer.from(`
   <text x="90" y="330" font-family="monospace" font-size="104" font-weight="700" fill="#e8e8f2" letter-spacing="4">ten<tspan fill="#7c5cff">sets</tspan></text>
   <text x="92" y="410" font-family="sans-serif" font-size="38" fill="#8b8ba3">10 sets to failure, every body part, every week.</text>
   <text x="92" y="462" font-family="sans-serif" font-size="38" fill="#8b8ba3">Tap a set. Watch the body light up.</text>
+  <text x="92" y="560" font-family="monospace" font-size="30" fill="#4c4c63">tensets.fit</text>
 </svg>`);
 
 await sharp(svg).png().toFile('app/opengraph-image.png');

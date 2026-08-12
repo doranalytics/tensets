@@ -20,6 +20,7 @@ const Body3D = dynamic(() => import("./body3d").then((m) => m.Body3D), {
 type Counts = Partial<Record<MuscleKey, number>>;
 interface Week {
   startedAt: string; // ISO date
+  endedAt?: string; // stamped when the week is archived
   counts: Counts;
 }
 interface Store {
@@ -70,7 +71,7 @@ function dayOf(iso: string): number {
 
 export default function Home() {
   const [store, setStore] = useState<Store | null>(null);
-  const [view, setView] = useState<"log" | "body">("log");
+  const [view, setView] = useState<"log" | "body" | "history">("log");
   const [flash, setFlash] = useState<MuscleKey | null>(null);
   const [confirmNew, setConfirmNew] = useState(false);
   const rowRefs = useRef<Partial<Record<MuscleKey, HTMLDivElement | null>>>({});
@@ -96,10 +97,11 @@ export default function Home() {
   const startWeek = () => {
     setStore((s) => {
       if (!s) return s;
-      const history = s.week ? [s.week, ...s.history] : s.history;
+      const history = s.week ? [{ ...s.week, endedAt: new Date().toISOString() }, ...s.history] : s.history;
       return { ...s, week: { startedAt: new Date().toISOString(), counts: {} }, history };
     });
     setConfirmNew(false);
+    setView("log");
   };
 
   const jumpTo = (key: MuscleKey) => {
@@ -142,6 +144,17 @@ export default function Home() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {store.history.length > 0 && (
+            <button
+              onClick={() => setView((v) => (v === "history" ? "log" : "history"))}
+              title="Past weeks"
+              aria-label="Week archive"
+              className="flex size-9 items-center justify-center rounded-full border border-line font-mono text-[13px] text-sub transition-colors hover:text-ink"
+              style={view === "history" ? { background: "var(--ink)", color: "var(--bg)" } : undefined}
+            >
+              ≡
+            </button>
+          )}
           <button
             onClick={() => setStore((s) => (s ? { ...s, theme: s.theme === "dark" ? "light" : "dark" } : s))}
             title={store.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
@@ -179,7 +192,49 @@ export default function Home() {
         </div>
       </header>
 
-      {!store.week ? (
+      {view === "history" ? (
+        /* The archive — every closed week, newest first. */
+        <section className="mt-6 space-y-4">
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-faint">
+            archive · {store.history.length} week{store.history.length === 1 ? "" : "s"}
+          </p>
+          {store.history.map((w, wi) => {
+            const parts = MUSCLES.filter((m) => (w.counts[m.key] ?? 0) > 0);
+            const hit = MUSCLES.filter((m) => (w.counts[m.key] ?? 0) >= FLOOR).length;
+            return (
+              <div key={wi} className="rounded-xl border border-line p-4" style={{ background: "var(--panel)" }}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-sm font-medium text-ink">
+                    {fmtDay(w.startedAt)}
+                    {w.endedAt ? ` → ${fmtDay(w.endedAt)}` : ""}
+                  </p>
+                  <p className="font-mono text-[11px] text-sub">
+                    <span className={hit > 0 ? "text-good" : ""}>{hit}</span> part{hit === 1 ? "" : "s"} at {FLOOR}
+                  </p>
+                </div>
+                {parts.length === 0 ? (
+                  <p className="mt-2 font-mono text-[11px] text-faint">nothing logged</p>
+                ) : (
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {parts.map((m) => {
+                      const n = w.counts[m.key] ?? 0;
+                      return (
+                        <span
+                          key={m.key}
+                          className="rounded-full border border-line px-2 py-0.5 font-mono text-[11px]"
+                          style={{ color: n >= FLOOR ? "var(--good)" : "var(--sub)" }}
+                        >
+                          {m.name} {n}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      ) : !store.week ? (
         /* No week yet — the app waits for you, it never resets itself. */
         <div className="mt-10 flex flex-col items-center rounded-2xl border border-dashed border-line px-6 py-12 text-center">
           <p className="wordmark text-lg text-ink">
@@ -330,6 +385,27 @@ export default function Home() {
         <p className="text-xs leading-relaxed text-faint">
           The theory, whole: a muscle grows on ~10 sets to failure a week — fewer and it maintains, past ~20 the
           returns diminish. Weeks are yours to open and close. Your log lives in this browser; nothing leaves it.
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-faint">
+          The research behind the numbers:{" "}
+          <a
+            href="https://pubmed.ncbi.nlm.nih.gov/27433992/"
+            target="_blank"
+            rel="noreferrer"
+            className="underline decoration-dotted underline-offset-2 hover:text-sub"
+          >
+            Schoenfeld, Ogborn &amp; Krieger 2017
+          </a>{" "}
+          (10+ weekly sets per muscle drove the most growth) and{" "}
+          <a
+            href="https://pubmed.ncbi.nlm.nih.gov/35291645/"
+            target="_blank"
+            rel="noreferrer"
+            className="underline decoration-dotted underline-offset-2 hover:text-sub"
+          >
+            Baz-Valle et al. 2022
+          </a>{" "}
+          (12–20 sets as the upper productive range).
         </p>
       </footer>
     </main>

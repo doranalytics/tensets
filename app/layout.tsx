@@ -7,7 +7,7 @@ const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono"
 const orbitron = Orbitron({ subsets: ["latin"], weight: ["500", "700"], variable: "--font-orbitron" });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://tensets.vercel.app"),
+  metadataBase: new URL("https://tensets.fit"),
   title: "tensets — 10 sets a week, every body part",
   description:
     "The whole theory of growth in one number: 10 sets to failure per body part per week (20 before diminishing returns). Tap a set, watch the body light up.",
