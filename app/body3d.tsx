@@ -1,12 +1,14 @@
 "use client";
 // The body, in 3D: a realistic sculpted anatomy figure (shipped as
 // public/body.glb, ~880KB) whose surface is carved into the 18 tracked
-// muscle regions by triangle position. Each region is its own material
-// group, so muscles light independently along a spectrum — red at 0 sets
-// through amber to green at 10, then on toward cyan/violet approaching 20.
-// Non-muscle surface (head, neck, shins, knees, feet, pelvis) stays a
-// translucent ghost gray. Drag (or swipe) to spin; tap a muscle to jump
-// to its row.
+// muscle regions. Regions are assigned per welded vertex and smoothed, so
+// boundaries blend instead of cutting hard edges; a per-vertex cavity
+// term keeps the sculpt's grooves dark while muscle bellies carry the
+// color, so the glow follows actual muscle shapes rather than reading as
+// paint. Colors run a spectrum by weekly sets — red at 0 through amber to
+// green at 10, then cyan toward violet approaching 20. Non-muscle surface
+// (head, neck, shins, knees, feet, pelvis) stays a translucent ghost
+// gray. Drag (or swipe) to spin; tap a muscle to jump to its row.
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -19,6 +21,7 @@ const REGION_KEYS: MuscleKey[] = [
   "lower-back", "quads", "hamstrings", "glutes", "calves",
 ];
 const FRAME = 0;
+const NREGIONS = REGION_KEYS.length + 1;
 const R: Record<MuscleKey, number> = Object.fromEntries(
   REGION_KEYS.map((k, i) => [k, i + 1])
 ) as Record<MuscleKey, number>;
@@ -43,9 +46,10 @@ function classify(fx: number, fy: number, fz: number): number {
     }
   }
 
-  // Deltoid caps — three heads split by depth.
-  if (fy >= 0.695 && fy <= 0.815 && ax > 0.095) {
-    if (fz > 0.03) return R["front-delts"];
+  // Deltoid caps — three heads split by depth into true front/side/rear
+  // thirds of the shoulder ball (its z spread is roughly -0.07..0.06).
+  if (fy >= 0.69 && fy <= 0.815 && ax > 0.09) {
+    if (fz > -0.005) return R["front-delts"];
     if (fz < -0.042) return R["rear-delts"];
     return R["side-delts"];
   }
@@ -92,9 +96,8 @@ function classify(fx: number, fy: number, fz: number): number {
 function rampColor(p: number, out: THREE.Color) {
   const t = Math.min(Math.max(p, 0), 2);
   const hue = t <= 1 ? 140 * t : 140 + 130 * (t - 1);
-  // Dim ember at 0 sets, bright at the 10-set floor, brighter still beyond.
   const light = 0.2 + 0.28 * Math.min(t, 1) + 0.08 * Math.max(t - 1, 0);
-  out.setHSL(hue / 360, 0.8, light);
+  out.setHSL(hue / 360, 0.75, light);
 }
 
 export function Body3D({
@@ -131,11 +134,11 @@ export function Body3D({
     camera.position.set(0, 1.85, 6.4);
     camera.lookAt(0, 1.75, 0);
 
-    scene.add(new THREE.AmbientLight(0xffffff, light ? 1.0 : 0.55));
+    scene.add(new THREE.AmbientLight(0xffffff, light ? 1.0 : 0.5));
     const key = new THREE.DirectionalLight(0xffffff, light ? 1.3 : 1.0);
     key.position.set(2, 4, 3);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.3);
     fill.position.set(-2.5, 1.5, 1);
     scene.add(fill);
     const rim = new THREE.DirectionalLight(0x7c5cff, light ? 0.4 : 0.7);
@@ -148,25 +151,66 @@ export function Body3D({
     if (!Number.isNaN(spin)) figure.rotation.y = spin;
     scene.add(figure);
 
+    // Live per-region color/glow uniforms, lerped every frame.
+    const regionColors = Array.from({ length: NREGIONS }, () => new THREE.Color(0x22222e));
+    const regionGlow = new Float32Array(NREGIONS);
+    const frameColor = new THREE.Color(light ? 0xb9b9cc : 0x343448);
+    regionColors[FRAME].copy(frameColor);
+
     const frameMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(light ? 0xb9b9cc : 0x3a3a52),
+      color: frameColor,
       transparent: true,
       opacity: light ? 0.6 : 0.5,
       roughness: 0.7,
       metalness: 0.1,
       depthWrite: false,
     });
-    const muscleMats = REGION_KEYS.map(
-      () =>
-        new THREE.MeshStandardMaterial({
-          color: 0x333344,
-          emissive: 0x000000,
-          emissiveIntensity: 0.3,
-          roughness: 0.42,
-          metalness: 0.15,
-        })
-    );
-    const materials = [frameMat, ...muscleMats];
+    const muscleMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.42,
+      metalness: 0.12,
+    });
+    muscleMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uColors = { value: regionColors };
+      shader.uniforms.uGlow = { value: regionGlow };
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+           attribute float aRegion;
+           attribute float aCavity;
+           uniform vec3 uColors[${NREGIONS}];
+           uniform float uGlow[${NREGIONS}];
+           varying vec3 vRegionColor;
+           varying vec3 vRegionEmissive;`
+        )
+        .replace(
+          "#include <begin_vertex>",
+          `#include <begin_vertex>
+           int rgn = int(aRegion + 0.5);
+           vec3 rc = uColors[rgn];
+           float rg = uGlow[rgn];
+           // Grooves between muscles stay dark; bellies carry the color.
+           vRegionColor = rc * mix(0.25, 1.15, aCavity);
+           vRegionEmissive = rc * rg * mix(0.1, 1.0, pow(aCavity, 1.6));`
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "#include <common>",
+          `#include <common>
+           varying vec3 vRegionColor;
+           varying vec3 vRegionEmissive;`
+        )
+        .replace(
+          "vec4 diffuseColor = vec4( diffuse, opacity );",
+          "vec4 diffuseColor = vec4( vRegionColor, opacity );"
+        )
+        .replace(
+          "#include <emissivemap_fragment>",
+          `#include <emissivemap_fragment>
+           totalEmissiveRadiance += vRegionEmissive;`
+        );
+    };
 
     let bodyMesh: THREE.Mesh | null = null;
     let faceRegion: Uint8Array | null = null;
@@ -176,8 +220,8 @@ export function Body3D({
       if (disposed) return;
       gltf.scene.updateMatrixWorld(true);
 
-      // Bake every primitive into one non-indexed position+normal soup in
-      // world space.
+      // Bake every primitive into one non-indexed position soup in world
+      // space, then weld duplicate positions into an indexed mesh.
       const chunks: THREE.BufferGeometry[] = [];
       gltf.scene.traverse((obj) => {
         if ((obj as THREE.Mesh).isMesh) {
@@ -187,94 +231,146 @@ export function Body3D({
           chunks.push(g);
         }
       });
-      let vertCount = 0;
-      for (const c of chunks) vertCount += c.attributes.position.count;
-      const pos = new Float32Array(vertCount * 3);
+      let soupCount = 0;
+      for (const c of chunks) soupCount += c.attributes.position.count;
+      const soup = new Float32Array(soupCount * 3);
       let off = 0;
       for (const c of chunks) {
-        pos.set(c.attributes.position.array as Float32Array, off);
+        soup.set(c.attributes.position.array as Float32Array, off);
         off += c.attributes.position.array.length;
         c.dispose();
       }
 
-      // Normalize: feet at 0, height → fractions for classification.
-      const box = new THREE.Box3().setFromArray(pos);
+      const box = new THREE.Box3().setFromArray(soup);
       const height = box.max.y - box.min.y;
       const cx = (box.min.x + box.max.x) / 2;
 
-      const faceCount = vertCount / 3;
-      let regionOf = new Uint8Array(faceCount);
+      // Weld by quantized position.
+      const q = 1e4 / height;
+      const weldIndex = new Map<string, number>();
+      const soupToWeld = new Uint32Array(soupCount);
+      const weldPos: number[] = [];
+      for (let i = 0; i < soupCount; i++) {
+        const x = soup[i * 3], y = soup[i * 3 + 1], z = soup[i * 3 + 2];
+        const k = `${Math.round(x * q)},${Math.round(y * q)},${Math.round(z * q)}`;
+        let w = weldIndex.get(k);
+        if (w === undefined) {
+          w = weldPos.length / 3;
+          weldIndex.set(k, w);
+          weldPos.push(x, y, z);
+        }
+        soupToWeld[i] = w;
+      }
+      const weldCount = weldPos.length / 3;
+      const faceCount = soupCount / 3;
+      const index = new Uint32Array(soupCount);
+      for (let i = 0; i < soupCount; i++) index[i] = soupToWeld[i];
+
+      // Neighbor graph over welded vertices.
+      const neighbors: Set<number>[] = Array.from({ length: weldCount }, () => new Set());
       for (let f = 0; f < faceCount; f++) {
-        const i = f * 9;
-        const fx = (pos[i] + pos[i + 3] + pos[i + 6]) / 3 - cx;
-        const fy = (pos[i + 1] + pos[i + 4] + pos[i + 7]) / 3 - box.min.y;
-        const fz = (pos[i + 2] + pos[i + 5] + pos[i + 8]) / 3;
-        regionOf[f] = classify(fx / height, fy / height, fz / height);
+        const a = index[f * 3], b = index[f * 3 + 1], c = index[f * 3 + 2];
+        neighbors[a].add(b).add(c);
+        neighbors[b].add(a).add(c);
+        neighbors[c].add(a).add(b);
       }
 
-      // Majority-vote smoothing over shared-vertex neighbors: erodes the
-      // ragged single-triangle fringes the plane-cut classifier leaves at
-      // region borders.
-      const vertFaces = new Map<string, number[]>();
-      const q = 1e4 / height;
-      for (let f = 0; f < faceCount; f++) {
-        for (let v = 0; v < 3; v++) {
-          const i = f * 9 + v * 3;
-          const k = `${Math.round(pos[i] * q)},${Math.round(pos[i + 1] * q)},${Math.round(pos[i + 2] * q)}`;
-          let list = vertFaces.get(k);
-          if (!list) vertFaces.set(k, (list = []));
-          list.push(f);
-        }
+      // Region per welded vertex, then majority-smooth so borders follow
+      // the surface instead of the classifier's cutting planes.
+      let region = new Uint8Array(weldCount);
+      for (let w = 0; w < weldCount; w++) {
+        region[w] = classify(
+          (weldPos[w * 3] - cx) / height,
+          (weldPos[w * 3 + 1] - box.min.y) / height,
+          weldPos[w * 3 + 2] / height
+        );
       }
-      const faceKeys: string[][] = [];
-      for (let f = 0; f < faceCount; f++) {
-        const keys: string[] = [];
-        for (let v = 0; v < 3; v++) {
-          const i = f * 9 + v * 3;
-          keys.push(`${Math.round(pos[i] * q)},${Math.round(pos[i + 1] * q)},${Math.round(pos[i + 2] * q)}`);
+      const votes = new Float32Array(NREGIONS);
+      for (let pass = 0; pass < 3; pass++) {
+        const next = new Uint8Array(region);
+        for (let w = 0; w < weldCount; w++) {
+          votes.fill(0);
+          votes[region[w]] += 2;
+          for (const nb of neighbors[w]) votes[region[nb]] += 1;
+          let best = region[w];
+          for (let r = 0; r < NREGIONS; r++) if (votes[r] > votes[best]) best = r;
+          next[w] = best;
         }
-        faceKeys.push(keys);
+        region = next;
+      }
+
+      // Smooth normals for the welded mesh (needed for cavity).
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(weldPos, 3));
+      geo.setIndex(new THREE.BufferAttribute(index, 1));
+      geo.computeVertexNormals();
+      const nrm = geo.attributes.normal.array as Float32Array;
+
+      // Cavity: how far a vertex sits above (belly) or below (groove) the
+      // local neighborhood, measured along its normal and normalized by
+      // edge length. Smoothed twice, then squashed to 0..1.
+      const raw = new Float32Array(weldCount);
+      for (let w = 0; w < weldCount; w++) {
+        let mx = 0, my = 0, mz = 0, edge = 0, n = 0;
+        const px = weldPos[w * 3], py = weldPos[w * 3 + 1], pz = weldPos[w * 3 + 2];
+        for (const nb of neighbors[w]) {
+          const bx = weldPos[nb * 3], by = weldPos[nb * 3 + 1], bz = weldPos[nb * 3 + 2];
+          mx += bx; my += by; mz += bz;
+          edge += Math.hypot(bx - px, by - py, bz - pz);
+          n++;
+        }
+        if (!n) continue;
+        mx /= n; my /= n; mz /= n; edge /= n;
+        const d =
+          ((px - mx) * nrm[w * 3] + (py - my) * nrm[w * 3 + 1] + (pz - mz) * nrm[w * 3 + 2]) /
+          (edge || 1);
+        raw[w] = d;
       }
       for (let pass = 0; pass < 2; pass++) {
-        const next = new Uint8Array(regionOf);
-        const votes = new Map<number, number>();
-        for (let f = 0; f < faceCount; f++) {
-          votes.clear();
-          for (const k of faceKeys[f])
-            for (const nb of vertFaces.get(k)!)
-              votes.set(regionOf[nb], (votes.get(regionOf[nb]) ?? 0) + 1);
-          let best = regionOf[f];
-          let bestN = (votes.get(best) ?? 0) + 1; // self keeps a small edge
-          for (const [r, n] of votes)
-            if (n > bestN) { best = r; bestN = n; }
-          next[f] = best;
+        const sm = new Float32Array(weldCount);
+        for (let w = 0; w < weldCount; w++) {
+          let s = raw[w], n = 1;
+          for (const nb of neighbors[w]) { s += raw[nb]; n++; }
+          sm[w] = s / n;
         }
-        regionOf = next;
+        raw.set(sm);
+      }
+      const cavity = new Float32Array(weldCount);
+      for (let w = 0; w < weldCount; w++) {
+        // raw ~ [-0.3, 0.3]; ridges positive. Sigmoid-ish squash.
+        cavity[w] = Math.min(1, Math.max(0, 0.55 + raw[w] * 3.5));
       }
 
-      // Sort faces by region so each region is one contiguous draw group.
-      const order = Array.from({ length: faceCount }, (_, i) => i).sort(
-        (a, b) => regionOf[a] - regionOf[b]
-      );
-      const sortedPos = new Float32Array(vertCount * 3);
+      geo.setAttribute("aRegion", new THREE.Float32BufferAttribute(Float32Array.from(region), 1));
+      geo.setAttribute("aCavity", new THREE.BufferAttribute(cavity, 1));
+
+      // Two draw groups: frame faces (translucent gray) first, then all
+      // muscle faces under the region-shaded material. A face is frame
+      // only when all three corners are frame, so borders fade via vertex
+      // interpolation instead of cutting.
+      const isFrameFace = (f: number) =>
+        region[index[f * 3]] === FRAME && region[index[f * 3 + 1]] === FRAME && region[index[f * 3 + 2]] === FRAME;
+      const frameFaces: number[] = [];
+      const muscleFaces: number[] = [];
+      for (let f = 0; f < faceCount; f++) (isFrameFace(f) ? frameFaces : muscleFaces).push(f);
+      const sortedIndex = new Uint32Array(soupCount);
       faceRegion = new Uint8Array(faceCount);
-      for (let n = 0; n < faceCount; n++) {
-        const src = order[n] * 9;
-        for (let k = 0; k < 9; k++) sortedPos[n * 9 + k] = pos[src + k];
-        faceRegion[n] = regionOf[order[n]];
+      let fi = 0;
+      for (const f of [...frameFaces, ...muscleFaces]) {
+        sortedIndex[fi * 3] = index[f * 3];
+        sortedIndex[fi * 3 + 1] = index[f * 3 + 1];
+        sortedIndex[fi * 3 + 2] = index[f * 3 + 2];
+        // Pick target: the most-common non-frame region among corners.
+        const rs = [region[index[f * 3]], region[index[f * 3 + 1]], region[index[f * 3 + 2]]];
+        faceRegion[fi] = rs.find((r) => r !== FRAME && rs.filter((x) => x === r).length >= 2) ?? rs.find((r) => r !== FRAME) ?? FRAME;
+        fi++;
       }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(sortedPos, 3));
-      geo.computeVertexNormals();
-      let start = 0;
-      for (let r = 0; r < materials.length; r++) {
-        let count = 0;
-        while (start + count < faceCount && faceRegion[start + count] === r) count++;
-        if (count > 0) geo.addGroup(start * 3, count * 3, r);
-        start += count;
-      }
+      geo.setIndex(new THREE.BufferAttribute(sortedIndex, 1));
+      geo.clearGroups();
+      geo.addGroup(0, frameFaces.length * 3, 0);
+      geo.addGroup(frameFaces.length * 3, muscleFaces.length * 3, 1);
 
-      bodyMesh = new THREE.Mesh(geo, materials);
+      bodyMesh = new THREE.Mesh(geo, [frameMat, muscleMat]);
       const s = 3.7 / height;
       bodyMesh.scale.set(s * (sex === "f" ? 0.96 : 1), s, s);
       bodyMesh.position.set(-cx * s, -box.min.y * s, 0);
@@ -330,12 +426,10 @@ export function Body3D({
     const tick = () => {
       for (let i = 0; i < REGION_KEYS.length; i++) {
         const p = progressRef.current[REGION_KEYS[i]] ?? 0;
-        const mat = muscleMats[i];
         rampColor(p, target);
-        mat.color.lerp(target, 0.12);
-        mat.emissive.lerp(target, 0.12);
+        regionColors[i + 1].lerp(target, 0.12);
         const glow = 0.08 + 0.7 * Math.min(p, 1) + 0.3 * Math.max(Math.min(p, 2) - 1, 0);
-        mat.emissiveIntensity += (glow - mat.emissiveIntensity) * 0.12;
+        regionGlow[i + 1] += (glow - regionGlow[i + 1]) * 0.12;
       }
       if (!dragging && Math.abs(velocity) > 0.0001) {
         figure.rotation.y += velocity;
@@ -363,7 +457,8 @@ export function Body3D({
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("pointerup", onUp);
       bodyMesh?.geometry.dispose();
-      for (const m of materials) m.dispose();
+      frameMat.dispose();
+      muscleMat.dispose();
       renderer.dispose();
       mount.removeChild(renderer.domElement);
     };
