@@ -328,15 +328,16 @@ export function segmentBody(soup) {
       if (region[nb] !== region[w]) { border[w] = 1; break; }
     }
   }
-  {
+  for (let pass = 0; pass < 2; pass++) {
     const sm = new Float32Array(weldCount);
     for (let w = 0; w < weldCount; w++) {
       let s = border[w], n = 1;
       for (const nb of neighbors[w]) { s += border[nb]; n++; }
       sm[w] = s / n;
     }
-    for (let w = 0; w < weldCount; w++) border[w] = Math.min(1, sm[w] * 1.5);
+    border.set(sm);
   }
+  for (let w = 0; w < weldCount; w++) border[w] = Math.min(1, border[w] * 1.4);
 
   // Face ordering: frame faces (translucent ghost) first, then muscle
   // faces. A face is frame only when all three corners are frame, so

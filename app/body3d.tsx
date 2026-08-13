@@ -142,14 +142,17 @@ export function Body3D({
            int rgn = int(aRegion + 0.5);
            vec3 rc = uColors[rgn];
            float rg = uGlow[rgn];
-           // The border band between regions renders as bare skin, so
-           // adjacent muscles separate instead of smearing into each other.
-           float seam = smoothstep(0.25, 0.8, aBorder);
-           // Grooves between muscles stay dark; bellies carry the color.
-           vec3 colored = rc * mix(0.16, 1.18, aCavity);
+           // Anatomical highlight, not spray paint: color pools on the
+           // muscle bellies and drains to bare skin in every groove — both
+           // the wide seam between regions and the sculpt's own furrows —
+           // so each muscle reads as a discrete painted shape.
+           float seam = smoothstep(0.2, 0.7, aBorder);
+           float belly = smoothstep(0.32, 0.6, aCavity);
+           float paint = (1.0 - seam) * mix(0.3, 1.0, belly);
+           vec3 colored = rc * mix(0.35, 1.2, aCavity);
            vec3 skin = uSkin * mix(0.5, 1.05, aCavity);
-           vRegionColor = mix(colored, skin, seam);
-           vRegionEmissive = rc * rg * mix(0.1, 1.0, pow(aCavity, 1.6)) * (1.0 - seam);
+           vRegionColor = mix(skin, colored, paint);
+           vRegionEmissive = rc * rg * mix(0.1, 1.0, pow(aCavity, 1.6)) * paint;
            // Trained muscles swell: displace bellies along the normal,
            // fading to zero in grooves and at region borders so the
            // surface stays continuous.
