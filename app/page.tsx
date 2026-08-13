@@ -127,7 +127,8 @@ export default function Home() {
   }
 
   const progress: Partial<Record<MuscleKey, number>> = {};
-  for (const m of MUSCLES) progress[m.key] = Math.min((counts[m.key] ?? 0) / FLOOR, 1);
+  // Uncapped past 1 so the body keeps shifting hue beyond 10 sets (2 = ceiling).
+  for (const m of MUSCLES) progress[m.key] = Math.min((counts[m.key] ?? 0) / FLOOR, 2);
 
   return (
     <main className="mx-auto max-w-xl px-4 pb-24 pt-6 sm:px-5 sm:pt-8">
@@ -286,7 +287,7 @@ export default function Home() {
             <section className="mt-4">
               <Body3D sex={store.sex} light={store.theme === "light"} progress={progress} onPick={jumpTo} />
               <p className="mt-2 text-center font-mono text-[10px] uppercase tracking-wider text-faint">
-                drag to spin · dim → lit at 10 sets · tap a muscle for its row
+                drag to spin · red → green at 10 sets → violet at 20 · tap a muscle for its row
               </p>
             </section>
           ) : (
