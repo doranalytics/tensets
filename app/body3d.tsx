@@ -5,10 +5,11 @@
 // boundaries blend instead of cutting hard edges; a per-vertex cavity
 // term keeps the sculpt's grooves dark while muscle bellies carry the
 // color, so the glow follows actual muscle shapes rather than reading as
-// paint. Colors run a spectrum by weekly sets — red at 0 through amber to
-// green at 10, then cyan toward violet approaching 20. Non-muscle surface
-// (head, neck, shins, knees, feet, pelvis) stays a translucent ghost
-// gray. Drag (or swipe) to spin; tap a muscle to jump to its row.
+// paint. Color encodes weekly sets as heat on a single perceptual ramp —
+// dim violet ember at 0, through wine and ember red, molten gold at 10,
+// white-hot approaching 20 — so brighter always means more. Non-muscle
+// surface (head, neck, shins, knees, feet, pelvis) stays a translucent
+// ghost gray. Drag (or swipe) to spin; tap a muscle to jump to its row.
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -90,14 +91,28 @@ function classify(fx: number, fy: number, fz: number): number {
   return FRAME; // feet
 }
 
-// Progress 0..2 (sets / 10-set floor, 20 = ceiling) → color along a
-// spectrum: red → amber → green at 1.0, then green → cyan → violet as the
-// muscle pushes past 10 toward 20 sets. Brightness rises the whole way.
+// Progress 0..2 (sets / 10-set floor, 20 = ceiling) → heat. An
+// inferno-family sequential ramp: dim violet ember at 0, through wine and
+// ember red, molten gold exactly at 1.0 (the floor), bleaching toward
+// white-hot at 2.0 (the ceiling). OKLCH lightness rises strictly
+// monotonically across the stops, so "more sets = brighter" reads at a
+// glance — and survives colorblindness — while the hue drift just
+// reinforces the heat metaphor. Stops lerp in linear-light space.
+const RAMP: { t: number; c: THREE.Color }[] = [
+  { t: 0.0, c: new THREE.Color("#332044") },
+  { t: 0.35, c: new THREE.Color("#6d2a4e") },
+  { t: 0.7, c: new THREE.Color("#b23a3f") },
+  { t: 1.0, c: new THREE.Color("#ef8f1f") },
+  { t: 1.45, c: new THREE.Color("#f8c435") },
+  { t: 2.0, c: new THREE.Color("#ffe9a0") },
+];
 function rampColor(p: number, out: THREE.Color) {
   const t = Math.min(Math.max(p, 0), 2);
-  const hue = t <= 1 ? 140 * t : 140 + 130 * (t - 1);
-  const light = 0.2 + 0.28 * Math.min(t, 1) + 0.08 * Math.max(t - 1, 0);
-  out.setHSL(hue / 360, 0.75, light);
+  let i = 1;
+  while (i < RAMP.length - 1 && RAMP[i].t < t) i++;
+  const a = RAMP[i - 1];
+  const b = RAMP[i];
+  out.copy(a.c).lerp(b.c, (t - a.t) / (b.t - a.t));
 }
 
 export function Body3D({
@@ -191,7 +206,7 @@ export function Body3D({
            vec3 rc = uColors[rgn];
            float rg = uGlow[rgn];
            // Grooves between muscles stay dark; bellies carry the color.
-           vRegionColor = rc * mix(0.25, 1.15, aCavity);
+           vRegionColor = rc * mix(0.16, 1.18, aCavity);
            vRegionEmissive = rc * rg * mix(0.1, 1.0, pow(aCavity, 1.6));`
         );
       shader.fragmentShader = shader.fragmentShader
@@ -428,7 +443,9 @@ export function Body3D({
         const p = progressRef.current[REGION_KEYS[i]] ?? 0;
         rampColor(p, target);
         regionColors[i + 1].lerp(target, 0.12);
-        const glow = 0.08 + 0.7 * Math.min(p, 1) + 0.3 * Math.max(Math.min(p, 2) - 1, 0);
+        // Emissive stays restrained below the floor so directional shading
+        // keeps the bellies sculpted; past 10 sets the muscle starts to blaze.
+        const glow = 0.04 + 0.16 * Math.min(p, 1) + 0.45 * Math.max(Math.min(p, 2) - 1, 0);
         regionGlow[i + 1] += (glow - regionGlow[i + 1]) * 0.12;
       }
       if (!dragging && Math.abs(velocity) > 0.0001) {
