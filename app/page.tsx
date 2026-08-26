@@ -31,7 +31,6 @@ const HERO_PROGRESS: Partial<Record<MuscleKey, number>> = Object.fromEntries(
 export default function Landing() {
   const router = useRouter();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let saved: { theme?: "dark" | "light"; week?: unknown; history?: unknown[] } | null = null;
@@ -47,13 +46,9 @@ export default function Landing() {
     const t = saved?.theme === "light" ? "light" : "dark";
     setTheme(t);
     document.documentElement.dataset.theme = t;
-    setReady(true);
   }, [router]);
 
   const progress = useMemo(() => HERO_PROGRESS, []);
-
-  // Don't flash the landing at a returning user mid-redirect.
-  if (!ready) return <main className="min-h-screen" style={{ background: "var(--bg)" }} />;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col px-4 pb-16 pt-8 sm:px-5">
