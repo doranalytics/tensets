@@ -5,6 +5,7 @@
 // mornings where every box got ticked.
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useCloudSync } from "../cloud";
 
 const ITEMS = [
   { key: "up", label: "Get up immediately", sub: "don't linger in bed" },
@@ -64,6 +65,9 @@ export default function Morning() {
   const [store, setStore] = useState<MorningStore | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [today, setToday] = useState(() => dayKey(new Date()));
+  // Cloud sync: every morning ever ticked mirrors to the account when
+  // signed in; the newer side wins on sign-in.
+  const { session, sync } = useCloudSync<MorningStore>("morning", store, setStore);
 
   useEffect(() => {
     setStore(load());
@@ -160,6 +164,15 @@ export default function Morning() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href="/account"
+            title={session ? (sync === "error" ? "Sync hit an error — tap for details" : "Synced to your account") : "Sign in to sync across devices"}
+            aria-label="Account & sync"
+            className="flex size-9 items-center justify-center rounded-full border border-line font-mono text-[13px] transition-colors hover:text-ink"
+            style={{ color: session ? (sync === "error" ? "var(--warn)" : "var(--good)") : "var(--sub)" }}
+          >
+            ☁
+          </Link>
           <button
             onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
             title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
@@ -273,7 +286,7 @@ export default function Morning() {
       <footer className="mt-12 border-t border-line pt-5">
         <p className="text-xs leading-relaxed text-faint">
           Nine boxes, same order, every morning. Tick them as you go — the streak only counts mornings where all nine
-          fall. Your mornings live in this browser; nothing leaves it.
+          fall. Your mornings save on this device — sign in and they follow you everywhere.
         </p>
       </footer>
     </main>

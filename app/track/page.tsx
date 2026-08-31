@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { CEILING, FLOOR, GROUPS, MUSCLES, MuscleKey } from "../muscles";
+import { useCloudSync } from "../cloud";
 
 // three.js only loads when the body view is opened.
 const Body3D = dynamic(() => import("../body3d").then((m) => m.Body3D), {
@@ -78,6 +79,9 @@ export default function Home() {
   const rowRefs = useRef<Partial<Record<MuscleKey, HTMLDivElement | null>>>({});
 
   useEffect(() => setStore(load()), []);
+  // Cloud sync: when signed in, the whole store (active week + archive)
+  // mirrors to the account; the newer side wins on sign-in.
+  const { session, sync } = useCloudSync<Store>("sets", store, setStore);
   useEffect(() => {
     if (!store) return;
     localStorage.setItem(LS_KEY, JSON.stringify(store));
@@ -154,6 +158,15 @@ export default function Home() {
             className="rounded-full border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-sub transition-colors hover:text-ink"
           >
             ☀ am
+          </Link>
+          <Link
+            href="/account"
+            title={session ? (sync === "error" ? "Sync hit an error — tap for details" : "Synced to your account") : "Sign in to sync across devices"}
+            aria-label="Account & sync"
+            className="flex size-9 items-center justify-center rounded-full border border-line font-mono text-[13px] transition-colors hover:text-ink"
+            style={{ color: session ? (sync === "error" ? "var(--warn)" : "var(--good)") : "var(--sub)" }}
+          >
+            ☁
           </Link>
           {store.history.length > 0 && (
             <button
@@ -395,7 +408,8 @@ export default function Home() {
       <footer className="mt-12 border-t border-line pt-5">
         <p className="text-xs leading-relaxed text-faint">
           The theory, whole: a muscle grows on ~10 sets to failure a week — fewer and it maintains, past ~20 the
-          returns diminish. Weeks are yours to open and close. Your log lives in this browser; nothing leaves it.
+          returns diminish. Weeks are yours to open and close. Your log saves on this device — sign in and it
+          follows you everywhere.
         </p>
         <p className="mt-2 text-xs leading-relaxed text-faint">
           The research behind the numbers:{" "}

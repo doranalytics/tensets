@@ -96,7 +96,7 @@ export default function Landing() {
           start training
         </button>
         <p className="mt-3 font-mono text-[11px] uppercase tracking-wider text-faint">
-          no account · saved on your device · free
+          free · no account needed · sign in to sync devices
         </p>
       </section>
 
@@ -117,7 +117,8 @@ export default function Landing() {
       <footer className="mt-12 border-t border-line pt-5">
         <p className="text-xs leading-relaxed text-faint">
           The theory, whole: a muscle grows on ~10 sets to failure a week — fewer and it maintains, past ~20 the
-          returns diminish. Your log lives in this browser; nothing leaves it, and no sign-in is required.
+          returns diminish. Your log saves on your device and works without an account; an optional sign-in syncs
+          it across devices.
         </p>
         <p className="mt-2 text-xs leading-relaxed text-faint">
           The research behind the numbers:{" "}
