@@ -148,6 +148,13 @@ export default function Home() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href="/morning"
+            title="Morning routine — nine boxes, every day"
+            className="rounded-full border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-sub transition-colors hover:text-ink"
+          >
+            ☀ am
+          </Link>
           {store.history.length > 0 && (
             <button
               onClick={() => setView((v) => (v === "history" ? "log" : "history"))}
