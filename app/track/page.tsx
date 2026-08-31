@@ -20,10 +20,16 @@ const Body3D = dynamic(() => import("../body3d").then((m) => m.Body3D), {
 });
 
 type Counts = Partial<Record<MuscleKey, number>>;
+interface DayLog {
+  date: string; // local YYYY-MM-DD
+  counts: Counts; // the sets logged that day
+}
 interface Week {
   startedAt: string; // ISO date
   endedAt?: string; // stamped when the week is archived
-  counts: Counts;
+  counts: Counts; // week totals — always the sum of days + pending
+  days?: DayLog[]; // saved days, oldest first
+  pending?: DayLog | null; // today's not-yet-saved sets
 }
 interface Store {
   version: 2;
@@ -67,6 +73,34 @@ function fmtDay(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function todayKey(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** "2026-08-31" → "mon 31" — the chips stay tiny, weekday first. */
+function fmtDayChip(key: string): string {
+  const d = new Date(`${key}T12:00:00`);
+  return `${d.toLocaleDateString(undefined, { weekday: "short" }).toLowerCase()} ${d.getDate()}`;
+}
+
+function totalSets(c: Counts): number {
+  return Object.values(c).reduce((a, n) => a + (n ?? 0), 0);
+}
+
+/** Merge a day's sets into the saved-days list (same date adds up). */
+function mergeDay(days: DayLog[], entry: DayLog): DayLog[] {
+  if (totalSets(entry.counts) === 0) return days;
+  const i = days.findIndex((d) => d.date === entry.date);
+  if (i < 0) return [...days, entry];
+  const merged: Counts = { ...days[i].counts };
+  for (const [k, n] of Object.entries(entry.counts)) {
+    merged[k as MuscleKey] = (merged[k as MuscleKey] ?? 0) + (n ?? 0);
+  }
+  return days.map((d, j) => (j === i ? { ...d, counts: merged } : d));
+}
+
 function dayOf(iso: string): number {
   return Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) + 1);
 }
@@ -94,9 +128,37 @@ export default function Home() {
   const bump = (key: MuscleKey, delta: number) => {
     setStore((s) => {
       if (!s?.week) return s;
-      const next = Math.max(0, (s.week.counts[key] ?? 0) + delta);
-      return { ...s, week: { ...s.week, counts: { ...s.week.counts, [key]: next } } };
+      const w = s.week;
+      const next = Math.max(0, (w.counts[key] ?? 0) + delta);
+      // Day attribution: sets land on today's pending log. If pending is
+      // from an earlier day (he never hit save), it files itself first —
+      // yesterday's sets stay yesterday's.
+      const today = todayKey();
+      let days = w.days ?? [];
+      let pending = w.pending ?? null;
+      if (pending && pending.date !== today) {
+        days = mergeDay(days, pending);
+        pending = null;
+      }
+      const pc = { ...(pending?.counts ?? {}) };
+      pc[key] = Math.max(0, (pc[key] ?? 0) + delta);
+      return {
+        ...s,
+        week: { ...w, counts: { ...w.counts, [key]: next }, days, pending: { date: today, counts: pc } },
+      };
     });
+  };
+
+  // "save day": file today's pending sets onto the chart right now.
+  const [daySaved, setDaySaved] = useState(false);
+  const saveDay = () => {
+    setStore((s) => {
+      if (!s?.week?.pending) return s;
+      const w = s.week;
+      return { ...s, week: { ...w, days: mergeDay(w.days ?? [], w.pending!), pending: null } };
+    });
+    setDaySaved(true);
+    setTimeout(() => setDaySaved(false), 1600);
   };
 
   const startWeek = () => {
@@ -314,7 +376,63 @@ export default function Home() {
               </p>
             </section>
           ) : (
-            <section className="mt-6 space-y-7">
+            <>
+              {/* The week, day by day — saved days as chips, today's
+                  unsaved sets beside the save button. */}
+              <section className="mt-6">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-faint">day by day</p>
+                  <button
+                    onClick={saveDay}
+                    disabled={!store.week.pending || totalSets(store.week.pending.counts) === 0}
+                    title="File today's sets onto the chart"
+                    className="rounded-full px-3.5 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-transform active:scale-95 disabled:opacity-40"
+                    style={
+                      daySaved
+                        ? { background: "var(--good)", color: "var(--bg)" }
+                        : { background: "var(--accent)", color: "#fff" }
+                    }
+                  >
+                    {daySaved
+                      ? "day saved ✓"
+                      : store.week.pending && totalSets(store.week.pending.counts) > 0
+                        ? `save day · ${totalSets(store.week.pending.counts)}`
+                        : "save day"}
+                  </button>
+                </div>
+                {(store.week.days ?? []).length === 0 && !store.week.pending ? (
+                  <p className="mt-2.5 font-mono text-[11px] text-faint">
+                    no days on the chart yet — log sets, then save the day
+                  </p>
+                ) : (
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {(store.week.days ?? []).map((d) => (
+                      <span
+                        key={d.date}
+                        title={MUSCLES.filter((m) => (d.counts[m.key] ?? 0) > 0)
+                          .map((m) => `${m.name} ${d.counts[m.key]}`)
+                          .join(" · ")}
+                        className="rounded-full border border-line px-2.5 py-1 font-mono text-[11px] text-sub"
+                        style={{ background: "var(--panel)" }}
+                      >
+                        {fmtDayChip(d.date)} <span className="text-good">{totalSets(d.counts)}</span>
+                      </span>
+                    ))}
+                    {store.week.pending && totalSets(store.week.pending.counts) > 0 && (
+                      <span
+                        title="Not filed yet — tap save day"
+                        className="rounded-full border border-dashed px-2.5 py-1 font-mono text-[11px]"
+                        style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
+                      >
+                        {store.week.pending.date === todayKey() ? "today" : fmtDayChip(store.week.pending.date)}{" "}
+                        {totalSets(store.week.pending.counts)} unsaved
+                      </span>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              <section className="mt-6 space-y-7">
               {GROUPS.map((group) => (
                 <div key={group}>
                   <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.2em] text-faint">{group}</h2>
@@ -400,7 +518,8 @@ export default function Home() {
                   </div>
                 </div>
               ))}
-            </section>
+              </section>
+            </>
           )}
         </>
       )}

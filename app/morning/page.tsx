@@ -33,6 +33,12 @@ function dayKey(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** "2026-08-31" → "mon 31" for the saved-stamp, weekday first. */
+function fmtDayChip(key: string): string {
+  const d = new Date(`${key}T12:00:00`);
+  return `${d.toLocaleDateString(undefined, { weekday: "short" }).toLowerCase()} ${d.getDate()}`;
+}
+
 function load(): MorningStore {
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -196,6 +202,11 @@ export default function Morning() {
         <div className="flex items-baseline justify-between">
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-faint">today</p>
           <p className="font-mono text-xs text-sub">
+            {done > 0 && (
+              <span className="mr-2 text-[10px] uppercase tracking-wider text-good" title="Every tick files itself to today — no save button needed">
+                saved to {fmtDayChip(today)} ✓
+              </span>
+            )}
             <span className={won ? "text-good" : "text-ink"}>{done}</span>
             <span className="text-faint">/{ITEMS.length}</span>
           </p>
