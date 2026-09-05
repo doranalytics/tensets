@@ -7,7 +7,11 @@
 // after that, every change is pushed (debounced) so the row always holds
 // the full session data.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  createClient,
+  type Session,
+  type SupabaseClient,
+} from "@supabase/supabase-js";
 
 let client: SupabaseClient | null | undefined;
 export function supa(): SupabaseClient | null {
@@ -27,13 +31,18 @@ const stampKey = (kind: Kind) => `tensets.sync.${kind}`;
  * local load finishes; `adopt` replaces the local store when the cloud
  * copy is newer.
  */
-export function useCloudSync<T>(kind: Kind, store: T | null, adopt: (data: T) => void) {
+export function useCloudSync<T>(
+  kind: Kind,
+  store: T | null,
+  adopt: (data: T) => void,
+) {
   const [session, setSession] = useState<Session | null>(null);
   const [sync, setSync] = useState<SyncState>("local");
   const reconciled = useRef(false);
   const loaded = useRef(false);
   const adopting = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPush = useRef<(() => Promise<void>) | null>(null);
   const storeRef = useRef(store);
   storeRef.current = store;
 
@@ -42,7 +51,12 @@ export function useCloudSync<T>(kind: Kind, store: T | null, adopt: (data: T) =>
       const now = new Date().toISOString();
       const { error } = await sb
         .from("tracker_state")
-        .upsert({ user_id: userId, kind, data: storeRef.current, updated_at: now });
+        .upsert({
+          user_id: userId,
+          kind,
+          data: storeRef.current,
+          updated_at: now,
+        });
       if (error) throw error;
       try {
         localStorage.setItem(stampKey(kind), now);
@@ -59,12 +73,28 @@ export function useCloudSync<T>(kind: Kind, store: T | null, adopt: (data: T) =>
     const { data: sub } = sb.auth.onAuthStateChange((_evt, s) => {
       setSession(s);
       if (!s) {
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = null;
+        pendingPush.current = null;
         reconciled.current = false;
         setSync("local");
       }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  // A tracker can unmount before the debounce ends when switching tabs.
+  // Flush that edit immediately; local data remains available if sync fails.
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
+      const pending = pendingPush.current;
+      pendingPush.current = null;
+      if (pending) void pending().catch(() => {});
+    },
+    [],
+  );
 
   // Reconcile once per sign-in, after the local store has loaded: the
   // newer of (cloud row, local store) becomes the truth on both sides.
@@ -119,19 +149,22 @@ export function useCloudSync<T>(kind: Kind, store: T | null, adopt: (data: T) =>
     } catch {}
     if (!session || !reconciled.current) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(async () => {
+    pendingPush.current = async () => {
       const sb = supa();
-      if (!sb || !session) return;
+      if (sb) await push(sb, session.user.id);
+    };
+    timer.current = setTimeout(async () => {
+      timer.current = null;
+      const pending = pendingPush.current;
+      pendingPush.current = null;
+      if (!pending) return;
       try {
-        await push(sb, session.user.id);
+        await pending();
         setSync("synced");
       } catch {
         setSync("error");
       }
     }, 800);
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store]);
 

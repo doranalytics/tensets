@@ -22,9 +22,24 @@
 
 /** @type {import("./muscles").MuscleKey[]} */
 export const REGION_KEYS = [
-  "pecs", "front-delts", "side-delts", "rear-delts", "triceps", "lats",
-  "traps", "rotator-cuff", "biceps", "forearms", "hands", "abs", "obliques",
-  "lower-back", "quads", "hamstrings", "glutes", "calves",
+  "pecs",
+  "front-delts",
+  "side-delts",
+  "rear-delts",
+  "triceps",
+  "lats",
+  "traps",
+  "rotator-cuff",
+  "biceps",
+  "forearms",
+  "hands",
+  "abs",
+  "obliques",
+  "lower-back",
+  "quads",
+  "hamstrings",
+  "glutes",
+  "calves",
 ];
 export const FRAME = 0;
 export const NREGIONS = REGION_KEYS.length + 1;
@@ -77,7 +92,12 @@ export function classify(fx, fy, fz) {
     if (fz < -0.015) {
       // back
       if (fy > 0.695) return ax < 0.055 ? R["traps"] : R["rotator-cuff"];
-      if (fy > 0.62) return ax < 0.045 ? (fy > 0.66 ? R["traps"] : R["lower-back"]) : R["lats"];
+      if (fy > 0.62)
+        return ax < 0.045
+          ? fy > 0.66
+            ? R["traps"]
+            : R["lower-back"]
+          : R["lats"];
       if (ax < 0.05) return R["lower-back"];
       return ax > 0.09 ? R["obliques"] : R["lats"];
     }
@@ -111,6 +131,7 @@ export function classify(fx, fy, fz) {
  * @returns {{
  *   weldPos: Float32Array, normal: Float32Array, index: Uint32Array,
  *   region: Uint8Array, cavity: Float32Array, border: Float32Array,
+ *   blendRegion: Float32Array, blendWeight: Float32Array,
  *   faceRegion: Uint8Array, frameFaceCount: number, faceCount: number,
  *   weldCount: number, height: number, minY: number, cx: number,
  * }}
@@ -119,9 +140,13 @@ export function segmentBody(soup) {
   const soupCount = soup.length / 3;
   const faceCount = soupCount / 3;
 
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  let minX = Infinity,
+    maxX = -Infinity,
+    minY = Infinity,
+    maxY = -Infinity;
   for (let i = 0; i < soupCount; i++) {
-    const x = soup[i * 3], y = soup[i * 3 + 1];
+    const x = soup[i * 3],
+      y = soup[i * 3 + 1];
     if (x < minX) minX = x;
     if (x > maxX) maxX = x;
     if (y < minY) minY = y;
@@ -137,7 +162,9 @@ export function segmentBody(soup) {
   /** @type {number[]} */
   const weldPosArr = [];
   for (let i = 0; i < soupCount; i++) {
-    const x = soup[i * 3], y = soup[i * 3 + 1], z = soup[i * 3 + 2];
+    const x = soup[i * 3],
+      y = soup[i * 3 + 1],
+      z = soup[i * 3 + 2];
     const k = `${Math.round(x * q)},${Math.round(y * q)},${Math.round(z * q)}`;
     let w = weldIndex.get(k);
     if (w === undefined) {
@@ -156,7 +183,9 @@ export function segmentBody(soup) {
   /** @type {Set<number>[]} */
   const neighbors = Array.from({ length: weldCount }, () => new Set());
   for (let f = 0; f < faceCount; f++) {
-    const a = index[f * 3], b = index[f * 3 + 1], c = index[f * 3 + 2];
+    const a = index[f * 3],
+      b = index[f * 3 + 1],
+      c = index[f * 3 + 2];
     neighbors[a].add(b).add(c);
     neighbors[b].add(a).add(c);
     neighbors[c].add(a).add(b);
@@ -169,7 +198,7 @@ export function segmentBody(soup) {
     region[w] = classify(
       (weldPos[w * 3] - cx) / height,
       (weldPos[w * 3 + 1] - minY) / height,
-      weldPos[w * 3 + 2] / height
+      weldPos[w * 3 + 2] / height,
     );
   }
   const votes = new Float32Array(NREGIONS);
@@ -189,11 +218,21 @@ export function segmentBody(soup) {
   // Smooth area-weighted vertex normals (cavity + lighting need them).
   const normal = new Float32Array(weldCount * 3);
   for (let f = 0; f < faceCount; f++) {
-    const a = index[f * 3], b = index[f * 3 + 1], c = index[f * 3 + 2];
-    const ax = weldPos[a * 3], ay = weldPos[a * 3 + 1], az = weldPos[a * 3 + 2];
-    const ux = weldPos[b * 3] - ax, uy = weldPos[b * 3 + 1] - ay, uz = weldPos[b * 3 + 2] - az;
-    const vx = weldPos[c * 3] - ax, vy = weldPos[c * 3 + 1] - ay, vz = weldPos[c * 3 + 2] - az;
-    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const a = index[f * 3],
+      b = index[f * 3 + 1],
+      c = index[f * 3 + 2];
+    const ax = weldPos[a * 3],
+      ay = weldPos[a * 3 + 1],
+      az = weldPos[a * 3 + 2];
+    const ux = weldPos[b * 3] - ax,
+      uy = weldPos[b * 3 + 1] - ay,
+      uz = weldPos[b * 3 + 2] - az;
+    const vx = weldPos[c * 3] - ax,
+      vy = weldPos[c * 3 + 1] - ay,
+      vz = weldPos[c * 3 + 2] - az;
+    const nx = uy * vz - uz * vy,
+      ny = uz * vx - ux * vz,
+      nz = ux * vy - uy * vx;
     for (const v of [a, b, c]) {
       normal[v * 3] += nx;
       normal[v * 3 + 1] += ny;
@@ -201,7 +240,8 @@ export function segmentBody(soup) {
     }
   }
   for (let w = 0; w < weldCount; w++) {
-    const l = Math.hypot(normal[w * 3], normal[w * 3 + 1], normal[w * 3 + 2]) || 1;
+    const l =
+      Math.hypot(normal[w * 3], normal[w * 3 + 1], normal[w * 3 + 2]) || 1;
     normal[w * 3] /= l;
     normal[w * 3 + 1] /= l;
     normal[w * 3 + 2] /= l;
@@ -212,25 +252,44 @@ export function segmentBody(soup) {
   // edge length. Smoothed twice, then squashed to 0..1.
   const raw = new Float32Array(weldCount);
   for (let w = 0; w < weldCount; w++) {
-    let mx = 0, my = 0, mz = 0, edge = 0, n = 0;
-    const px = weldPos[w * 3], py = weldPos[w * 3 + 1], pz = weldPos[w * 3 + 2];
+    let mx = 0,
+      my = 0,
+      mz = 0,
+      edge = 0,
+      n = 0;
+    const px = weldPos[w * 3],
+      py = weldPos[w * 3 + 1],
+      pz = weldPos[w * 3 + 2];
     for (const nb of neighbors[w]) {
-      const bx = weldPos[nb * 3], by = weldPos[nb * 3 + 1], bz = weldPos[nb * 3 + 2];
-      mx += bx; my += by; mz += bz;
+      const bx = weldPos[nb * 3],
+        by = weldPos[nb * 3 + 1],
+        bz = weldPos[nb * 3 + 2];
+      mx += bx;
+      my += by;
+      mz += bz;
       edge += Math.hypot(bx - px, by - py, bz - pz);
       n++;
     }
     if (!n) continue;
-    mx /= n; my /= n; mz /= n; edge /= n;
+    mx /= n;
+    my /= n;
+    mz /= n;
+    edge /= n;
     raw[w] =
-      ((px - mx) * normal[w * 3] + (py - my) * normal[w * 3 + 1] + (pz - mz) * normal[w * 3 + 2]) /
+      ((px - mx) * normal[w * 3] +
+        (py - my) * normal[w * 3 + 1] +
+        (pz - mz) * normal[w * 3 + 2]) /
       (edge || 1);
   }
   for (let pass = 0; pass < 2; pass++) {
     const sm = new Float32Array(weldCount);
     for (let w = 0; w < weldCount; w++) {
-      let s = raw[w], n = 1;
-      for (const nb of neighbors[w]) { s += raw[nb]; n++; }
+      let s = raw[w],
+        n = 1;
+      for (const nb of neighbors[w]) {
+        s += raw[nb];
+        n++;
+      }
       sm[w] = s / n;
     }
     raw.set(sm);
@@ -261,20 +320,26 @@ export function segmentBody(soup) {
       [R["forearms"], R["biceps"]],
       [R["forearms"], R["triceps"]],
       [R["abs"], R["obliques"]],
-    ].map(([a, b]) => `${Math.min(a, b)}|${Math.max(a, b)}`)
+    ].map(([a, b]) => `${Math.min(a, b)}|${Math.max(a, b)}`),
   );
   const pinned = (a, b) =>
-    a === FRAME || b === FRAME ||
+    a === FRAME ||
+    b === FRAME ||
     (DELTS.has(a) && DELTS.has(b)) ||
     pinnedPair.has(`${Math.min(a, b)}|${Math.max(a, b)}`);
   const weight = new Float32Array(weldCount);
-  for (let w = 0; w < weldCount; w++) weight[w] = Math.pow(Math.max(cavity[w], 0.05), 4);
+  for (let w = 0; w < weldCount; w++)
+    weight[w] = Math.pow(Math.max(cavity[w], 0.05), 4);
   for (let pass = 0; pass < 6; pass++) {
     const next = new Uint8Array(region);
     let changed = 0;
     for (let w = 0; w < weldCount; w++) {
       let frontier = false;
-      for (const nb of neighbors[w]) if (region[nb] !== region[w]) { frontier = true; break; }
+      for (const nb of neighbors[w])
+        if (region[nb] !== region[w]) {
+          frontier = true;
+          break;
+        }
       if (!frontier) continue;
       votes.fill(0);
       votes[region[w]] += weight[w] * 1.35; // inertia
@@ -285,7 +350,10 @@ export function segmentBody(soup) {
         if (pinned(region[w], r)) continue;
         best = r;
       }
-      if (best !== region[w]) { next[w] = best; changed++; }
+      if (best !== region[w]) {
+        next[w] = best;
+        changed++;
+      }
     }
     region = next;
     if (!changed) break;
@@ -312,10 +380,13 @@ export function segmentBody(soup) {
       if (members.length < 20) {
         votes.fill(0);
         for (const m of members)
-          for (const nb of neighbors[m]) if (region[nb] !== label) votes[region[nb]]++;
+          for (const nb of neighbors[m])
+            if (region[nb] !== label) votes[region[nb]]++;
         let best = -1;
-        for (let r = 0; r < NREGIONS; r++) if (best < 0 || votes[r] > votes[best]) best = r;
-        if (best >= 0 && votes[best] > 0) for (const m of members) region[m] = best;
+        for (let r = 0; r < NREGIONS; r++)
+          if (best < 0 || votes[r] > votes[best]) best = r;
+        if (best >= 0 && votes[best] > 0)
+          for (const m of members) region[m] = best;
       }
     }
   }
@@ -325,36 +396,86 @@ export function segmentBody(soup) {
   const border = new Float32Array(weldCount);
   for (let w = 0; w < weldCount; w++) {
     for (const nb of neighbors[w]) {
-      if (region[nb] !== region[w]) { border[w] = 1; break; }
+      if (region[nb] !== region[w]) {
+        border[w] = 1;
+        break;
+      }
     }
   }
   for (let pass = 0; pass < 2; pass++) {
     const sm = new Float32Array(weldCount);
     for (let w = 0; w < weldCount; w++) {
-      let s = border[w], n = 1;
-      for (const nb of neighbors[w]) { s += border[nb]; n++; }
+      let s = border[w],
+        n = 1;
+      for (const nb of neighbors[w]) {
+        s += border[nb];
+        n++;
+      }
       sm[w] = s / n;
     }
     border.set(sm);
   }
   for (let w = 0; w < weldCount; w++) border[w] = Math.min(1, border[w] * 1.4);
 
-  // Face ordering: frame faces (translucent ghost) first, then muscle
+  // Diffuse region weights across four narrow rings of the surface.
+  // Discrete labels still drive picking and the anatomical QA gate, while
+  // these weights remove the saw-toothed paint borders on coarse triangles.
+  // Retain the three dominant labels per vertex so the GPU can blend the
+  // live weekly colors without repainting or rebuilding the mesh.
+  let weights = new Float32Array(weldCount * NREGIONS);
+  for (let w = 0; w < weldCount; w++) weights[w * NREGIONS + region[w]] = 1;
+  for (let pass = 0; pass < 4; pass++) {
+    const next = new Float32Array(weights.length);
+    for (let w = 0; w < weldCount; w++) {
+      const count = neighbors[w].size;
+      for (let r = 0; r < NREGIONS; r++) {
+        let sum = 0;
+        for (const nb of neighbors[w]) sum += weights[nb * NREGIONS + r];
+        next[w * NREGIONS + r] = count
+          ? weights[w * NREGIONS + r] * 0.5 + (sum / count) * 0.5
+          : weights[w * NREGIONS + r];
+      }
+    }
+    weights = next;
+  }
+  const blendRegion = new Float32Array(weldCount * 3);
+  const blendWeight = new Float32Array(weldCount * 3);
+  for (let w = 0; w < weldCount; w++) {
+    const ranked = Array.from({ length: NREGIONS }, (_, r) => r).sort(
+      (a, b) => weights[w * NREGIONS + b] - weights[w * NREGIONS + a],
+    );
+    const total =
+      weights[w * NREGIONS + ranked[0]] +
+      weights[w * NREGIONS + ranked[1]] +
+      weights[w * NREGIONS + ranked[2]];
+    for (let k = 0; k < 3; k++) {
+      blendRegion[w * 3 + k] = ranked[k];
+      blendWeight[w * 3 + k] = weights[w * NREGIONS + ranked[k]] / total;
+    }
+  }
+
+  // Face ordering: frame faces first, then muscle faces. The current
+  // renderer uses one opaque material across both groups.
   // faces. A face is frame only when all three corners are frame, so
   // borders fade via vertex interpolation instead of cutting. faceRegion
   // (aligned to the sorted order) backs tap-to-pick.
   const isFrameFace = (f) =>
-    region[index[f * 3]] === FRAME && region[index[f * 3 + 1]] === FRAME && region[index[f * 3 + 2]] === FRAME;
+    region[index[f * 3]] === FRAME &&
+    region[index[f * 3 + 1]] === FRAME &&
+    region[index[f * 3 + 2]] === FRAME;
   /** @type {number[]} */
   const frameFaces = [];
   /** @type {number[]} */
   const muscleFaces = [];
-  for (let f = 0; f < faceCount; f++) (isFrameFace(f) ? frameFaces : muscleFaces).push(f);
+  for (let f = 0; f < faceCount; f++)
+    (isFrameFace(f) ? frameFaces : muscleFaces).push(f);
   const sortedIndex = new Uint32Array(soupCount);
   const faceRegion = new Uint8Array(faceCount);
   let fi = 0;
   for (const f of [...frameFaces, ...muscleFaces]) {
-    const a = index[f * 3], b = index[f * 3 + 1], c = index[f * 3 + 2];
+    const a = index[f * 3],
+      b = index[f * 3 + 1],
+      c = index[f * 3 + 2];
     sortedIndex[fi * 3] = a;
     sortedIndex[fi * 3 + 1] = b;
     sortedIndex[fi * 3 + 2] = c;
@@ -373,6 +494,8 @@ export function segmentBody(soup) {
     region,
     cavity,
     border,
+    blendRegion,
+    blendWeight,
     faceRegion,
     frameFaceCount: frameFaces.length,
     faceCount,

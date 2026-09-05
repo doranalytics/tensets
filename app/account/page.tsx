@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supa } from "../cloud";
 import type { Session } from "@supabase/supabase-js";
+import { AppNav } from "../app-nav";
 
 export default function Account() {
   const [session, setSession] = useState<Session | null>(null);
@@ -19,7 +20,8 @@ export default function Account() {
     // The account page keeps the theme the trackers chose.
     try {
       const raw = localStorage.getItem("tensets.v1");
-      document.documentElement.dataset.theme = raw && JSON.parse(raw).theme === "light" ? "light" : "dark";
+      document.documentElement.dataset.theme =
+        raw && JSON.parse(raw).theme === "light" ? "light" : "dark";
     } catch {}
     const sb = supa();
     if (!sb) {
@@ -50,7 +52,9 @@ export default function Account() {
           : await sb.auth.signUp({ email: email.trim(), password });
       if (error) throw error;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong — try again.");
+      setError(
+        e instanceof Error ? e.message : "Something went wrong — try again.",
+      );
     } finally {
       setBusy(null);
     }
@@ -65,15 +69,13 @@ export default function Account() {
   };
 
   return (
-    <main className="mx-auto max-w-xl px-4 pb-24 pt-6 sm:px-5 sm:pt-8">
+    <main className="mx-auto max-w-2xl px-5 pb-24 pt-6 sm:px-8 sm:pt-9">
       <header className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="wordmark text-2xl lowercase text-ink">
-            acc<span style={{ color: "var(--accent)" }}>ount</span>
-          </h1>
-          <p className="mt-1 font-mono text-[11px] uppercase tracking-wider text-sub">
-            {session ? "synced across your devices" : "one login, both trackers"}
-          </p>
+          <Link href="/track" className="wordmark text-2xl lowercase text-ink">
+            ten<span style={{ color: "var(--accent)" }}>sets</span>
+          </Link>
+          <p className="mt-1 text-xs text-sub">Your daily practice.</p>
         </div>
         <div className="flex items-center gap-2">
           <Link
@@ -91,6 +93,14 @@ export default function Account() {
         </div>
       </header>
 
+      <AppNav />
+      <h1 className="page-title mt-8">Your account</h1>
+      <p className="mt-2 text-sm text-sub">
+        {session
+          ? "Your progress, wherever you are."
+          : "One login. Your workouts and mornings, together."}
+      </p>
+
       {!checked ? (
         <div className="mt-8 space-y-3">
           <div className="h-12 animate-pulse rounded-xl bg-panel" />
@@ -99,18 +109,27 @@ export default function Account() {
       ) : !supa() ? (
         <div className="mt-10 rounded-2xl border border-dashed border-line px-6 py-10 text-center">
           <p className="text-sm text-sub">
-            Sync isn&apos;t configured on this build. Your log still saves on this device.
+            Sync isn&apos;t configured on this build. Your log still saves on
+            this device.
           </p>
         </div>
       ) : session ? (
         /* Signed in */
         <section className="mt-8 space-y-4">
-          <div className="rounded-xl border border-line p-5" style={{ background: "var(--panel)" }}>
-            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-faint">signed in as</p>
-            <p className="mt-1.5 truncate text-sm font-medium text-ink">{session.user.email}</p>
+          <div
+            className="rounded-xl border border-line p-5"
+            style={{ background: "var(--panel)" }}
+          >
+            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-faint">
+              signed in as
+            </p>
+            <p className="mt-1.5 truncate text-sm font-medium text-ink">
+              {session.user.email}
+            </p>
             <p className="mt-3 text-xs leading-relaxed text-sub">
-              Your sets weeks (current + archive) and your mornings all live in your account now. Log on any
-              device you sign in on and the others follow — the most recent change wins.
+              Your sets weeks (current + archive) and your mornings all live in
+              your account now. Log on any device you sign in on and the others
+              follow — the most recent change wins.
             </p>
           </div>
           <button
@@ -121,14 +140,21 @@ export default function Account() {
             {busy === "out" ? "signing out…" : "sign out"}
           </button>
           <p className="text-xs leading-relaxed text-faint">
-            Signing out leaves your log on this device untouched — it just stops following you.
+            Signing out leaves your log on this device untouched — it just stops
+            following you.
           </p>
         </section>
       ) : (
         /* Signed out */
         <section className="mt-8">
-          <div className="rounded-xl border border-line p-5" style={{ background: "var(--panel)" }}>
-            <label className="block font-mono text-[11px] uppercase tracking-[0.2em] text-faint" htmlFor="email">
+          <div
+            className="rounded-xl border border-line p-5"
+            style={{ background: "var(--panel)" }}
+          >
+            <label
+              className="block font-mono text-[11px] uppercase tracking-[0.2em] text-faint"
+              htmlFor="email"
+            >
               email
             </label>
             <input
@@ -176,8 +202,9 @@ export default function Account() {
             </div>
           </div>
           <p className="mt-4 text-xs leading-relaxed text-faint">
-            An account is optional. It exists for one reason: your sets and mornings sync to it, so a new phone
-            or a second browser picks up right where you left off. No email verification, no newsletter.
+            An account is optional. It exists for one reason: your sets and
+            mornings sync to it, so a new phone or a second browser picks up
+            right where you left off. No email verification, no newsletter.
           </p>
         </section>
       )}

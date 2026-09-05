@@ -1,59 +1,46 @@
 "use client";
-// tensets — 10 sets to failure per body part per week; past 20 the returns
-// diminish. Rows to log, a 3D body that lights up, weeks you start
-// yourself. No aggregate vanity numbers: the only stat that matters is
-// sets per body part.
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { CEILING, FLOOR, GROUPS, MUSCLES, MuscleKey } from "../muscles";
 import { useCloudSync } from "../cloud";
+import { AppNav } from "../app-nav";
+import { DayPicker } from "../day-picker";
+import {
+  countsForDay,
+  loggedDates,
+  replaceDay,
+  setDayMuscle,
+  totalSets,
+  undatedSets,
+  type Counts,
+  type Week,
+  type WorkoutStore,
+} from "../workout-store";
 
-// three.js only loads when the body view is opened.
 const Body3D = dynamic(() => import("../body3d").then((m) => m.Body3D), {
   ssr: false,
   loading: () => (
-    <div className="flex h-[62vh] min-h-[380px] items-center justify-center">
-      <p className="font-mono text-[11px] uppercase tracking-wider text-faint">loading the body…</p>
+    <div className="flex h-[62vh] min-h-[380px] items-center justify-center rounded-3xl border border-line bg-panel">
+      <p className="text-sm text-sub">Preparing your body map…</p>
     </div>
   ),
 });
 
-type Counts = Partial<Record<MuscleKey, number>>;
-interface DayLog {
-  date: string; // local YYYY-MM-DD
-  counts: Counts; // the sets logged that day
-}
-interface Week {
-  startedAt: string; // ISO date
-  endedAt?: string; // stamped when the week is archived
-  counts: Counts; // week totals — always the sum of days + pending
-  days?: DayLog[]; // saved days, oldest first
-  pending?: DayLog | null; // today's not-yet-saved sets
-}
-interface Store {
-  version: 2;
-  sex: "m" | "f";
-  theme: "dark" | "light";
-  week: Week | null; // null until the user starts one
-  history: Week[]; // finished weeks, newest first
-}
-
 const LS_KEY = "tensets.v1";
 
-/** Load the store, migrating v1 (auto-week map, single "delts") in place. */
-function load(): Store {
+/** Keep the existing v1 migration and v2 cloud/local storage shape intact. */
+function load(): WorkoutStore {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed.version === 2) return parsed as Store;
-      // v1 → v2: the newest auto-week becomes the active week; "delts"
-      // counts land on side delts.
+      if (parsed.version === 2) return parsed as WorkoutStore;
       const weeks: Record<string, Counts> = parsed.weeks ?? {};
       const keys = Object.keys(weeks).sort();
-      const migrate = (c: Counts & { delts?: number }): Counts => {
-        const { delts, ...rest } = c;
+      const migrate = (counts: Counts & { delts?: number }): Counts => {
+        const { delts, ...rest } = counts;
         return delts ? { ...rest, "side-delts": delts } : rest;
       };
       const latest = keys.at(-1);
@@ -61,113 +48,193 @@ function load(): Store {
         version: 2,
         sex: parsed.sex ?? "m",
         theme: "dark",
-        week: latest ? { startedAt: new Date().toISOString(), counts: migrate(weeks[latest]) } : null,
-        history: keys.slice(0, -1).map((k) => ({ startedAt: k, counts: migrate(weeks[k]) })),
+        week: latest
+          ? {
+              startedAt: new Date().toISOString(),
+              counts: migrate(weeks[latest]),
+            }
+          : null,
+        history: keys
+          .slice(0, -1)
+          .map((key) => ({ startedAt: key, counts: migrate(weeks[key]) })),
       };
     }
   } catch {}
   return { version: 2, sex: "m", theme: "dark", week: null, history: [] };
 }
 
+function dateKey(date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function localDate(iso: string): string {
+  return iso.length === 10 ? iso : dateKey(new Date(iso));
+}
+
 function fmtDay(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(`${localDate(iso)}T12:00:00`).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
-function todayKey(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+function fmtWeekRange(week: Week): string {
+  const start = new Date(`${localDate(week.startedAt)}T12:00:00`);
+  const end = week.endedAt
+    ? new Date(`${localDate(week.endedAt)}T12:00:00`)
+    : null;
+  const startLabel = start.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year:
+      !end || start.getFullYear() !== end.getFullYear() ? "numeric" : undefined,
+  });
+  return end
+    ? `${startLabel} – ${end.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`
+    : startLabel;
 }
 
-/** "2026-08-31" → "mon 31" — the chips stay tiny, weekday first. */
-function fmtDayChip(key: string): string {
-  const d = new Date(`${key}T12:00:00`);
-  return `${d.toLocaleDateString(undefined, { weekday: "short" }).toLowerCase()} ${d.getDate()}`;
+function fmtChip(date: string): string {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+  });
 }
 
-function totalSets(c: Counts): number {
-  return Object.values(c).reduce((a, n) => a + (n ?? 0), 0);
-}
-
-/** Merge a day's sets into the saved-days list (same date adds up). */
-function mergeDay(days: DayLog[], entry: DayLog): DayLog[] {
-  if (totalSets(entry.counts) === 0) return days;
-  const i = days.findIndex((d) => d.date === entry.date);
-  if (i < 0) return [...days, entry];
-  const merged: Counts = { ...days[i].counts };
-  for (const [k, n] of Object.entries(entry.counts)) {
-    merged[k as MuscleKey] = (merged[k as MuscleKey] ?? 0) + (n ?? 0);
-  }
-  return days.map((d, j) => (j === i ? { ...d, counts: merged } : d));
-}
-
-function dayOf(iso: string): number {
-  return Math.max(1, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) + 1);
+function weekBounds(week: Week, today: string) {
+  // Include recorded dates even if an older version logged outside its week.
+  const dates = loggedDates(week);
+  const min = [localDate(week.startedAt), ...dates].sort()[0];
+  const max = [week.endedAt ? localDate(week.endedAt) : today, ...dates]
+    .sort()
+    .at(-1)!;
+  return { min, max: max > today ? today : max };
 }
 
 export default function Home() {
-  const [store, setStore] = useState<Store | null>(null);
+  const [store, setStore] = useState<WorkoutStore | null>(null);
   const [view, setView] = useState<"log" | "body" | "history">("log");
+  const [weekIndex, setWeekIndex] = useState(-1);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [today, setToday] = useState(dateKey);
+  const selectedDate = selectedDay ?? today;
   const [flash, setFlash] = useState<MuscleKey | null>(null);
   const [confirmNew, setConfirmNew] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
+  const [storageError, setStorageError] = useState(false);
   const rowRefs = useRef<Partial<Record<MuscleKey, HTMLDivElement | null>>>({});
 
   useEffect(() => setStore(load()), []);
-  // Cloud sync: when signed in, the whole store (active week + archive)
-  // mirrors to the account; the newer side wins on sign-in.
-  const { session, sync } = useCloudSync<Store>("sets", store, setStore);
+  useEffect(() => {
+    const refreshDate = () => setToday(dateKey());
+    const timer = setInterval(refreshDate, 60_000);
+    window.addEventListener("focus", refreshDate);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refreshDate);
+    };
+  }, []);
+  const { session, sync } = useCloudSync<WorkoutStore>("sets", store, setStore);
   useEffect(() => {
     if (!store) return;
-    localStorage.setItem(LS_KEY, JSON.stringify(store));
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(store));
+      setStorageError(false);
+    } catch {
+      setStorageError(true);
+    }
     document.documentElement.dataset.theme = store.theme;
   }, [store]);
 
-  const counts: Counts = useMemo(() => store?.week?.counts ?? {}, [store]);
-  const lastWeek: Counts = useMemo(() => store?.history[0]?.counts ?? {}, [store]);
+  const week = weekIndex < 0 ? store?.week : store?.history[weekIndex];
+  const counts: Counts = useMemo(() => week?.counts ?? {}, [week]);
+  const dayCounts = useMemo(
+    () => (week ? countsForDay(week, selectedDate) : {}),
+    [week, selectedDate],
+  );
+  const lastWeek =
+    store?.history[weekIndex < 0 ? 0 : weekIndex + 1]?.counts ?? {};
+  const bounds = week ? weekBounds(week, today) : undefined;
+  const dayInWeek = Boolean(
+    bounds && selectedDate >= bounds.min && selectedDate <= bounds.max,
+  );
 
-  const bump = (key: MuscleKey, delta: number) => {
-    setStore((s) => {
-      if (!s?.week) return s;
-      const w = s.week;
-      const next = Math.max(0, (w.counts[key] ?? 0) + delta);
-      // Day attribution: sets land on today's pending log. If pending is
-      // from an earlier day (he never hit save), it files itself first —
-      // yesterday's sets stay yesterday's.
-      const today = todayKey();
-      let days = w.days ?? [];
-      let pending = w.pending ?? null;
-      if (pending && pending.date !== today) {
-        days = mergeDay(days, pending);
-        pending = null;
-      }
-      const pc = { ...(pending?.counts ?? {}) };
-      pc[key] = Math.max(0, (pc[key] ?? 0) + delta);
+  const chooseWeek = (index: number) => {
+    const chosen = index < 0 ? store?.week : store?.history[index];
+    if (!chosen) return;
+    const range = weekBounds(chosen, today);
+    const date = index < 0 ? today : (loggedDates(chosen).at(-1) ?? range.max);
+    setSelectedDay(
+      index < 0 && date === today
+        ? null
+        : date < range.min
+          ? range.min
+          : date > range.max
+            ? range.max
+            : date,
+    );
+    setWeekIndex(index);
+    setSaveMessage("");
+    setView("log");
+  };
+
+  const updateSelectedWeek = (change: (current: Week) => Week) => {
+    setStore((current) => {
+      if (!current) return current;
+      if (weekIndex < 0)
+        return current.week
+          ? { ...current, week: change(current.week) }
+          : current;
       return {
-        ...s,
-        week: { ...w, counts: { ...w.counts, [key]: next }, days, pending: { date: today, counts: pc } },
+        ...current,
+        history: current.history.map((entry, index) =>
+          index === weekIndex ? change(entry) : entry,
+        ),
       };
     });
   };
 
-  // "save day": file today's pending sets onto the chart right now.
-  const [daySaved, setDaySaved] = useState(false);
+  const bump = (key: MuscleKey, delta: number) => {
+    if (!dayInWeek) return;
+    updateSelectedWeek((current) =>
+      setDayMuscle(
+        current,
+        selectedDate,
+        key,
+        (countsForDay(current, selectedDate)[key] ?? 0) + delta,
+      ),
+    );
+    setSaveMessage(`Changes to ${fmtDay(selectedDate)} saved`);
+  };
+
   const saveDay = () => {
-    setStore((s) => {
-      if (!s?.week?.pending) return s;
-      const w = s.week;
-      return { ...s, week: { ...w, days: mergeDay(w.days ?? [], w.pending!), pending: null } };
-    });
-    setDaySaved(true);
-    setTimeout(() => setDaySaved(false), 1600);
+    if (!dayInWeek) return;
+    updateSelectedWeek((current) =>
+      replaceDay(current, selectedDate, countsForDay(current, selectedDate)),
+    );
+    setSaveMessage(
+      `${fmtDay(selectedDate)} saved${totalSets(dayCounts) === 0 ? " as a rest day" : ""}`,
+    );
   };
 
   const startWeek = () => {
-    setStore((s) => {
-      if (!s) return s;
-      const history = s.week ? [{ ...s.week, endedAt: new Date().toISOString() }, ...s.history] : s.history;
-      return { ...s, week: { startedAt: new Date().toISOString(), counts: {} }, history };
+    const now = new Date();
+    setStore((current) => {
+      if (!current) return current;
+      const history = current.week
+        ? [{ ...current.week, endedAt: now.toISOString() }, ...current.history]
+        : current.history;
+      return {
+        ...current,
+        week: { startedAt: now.toISOString(), counts: {} },
+        history,
+      };
     });
     setConfirmNew(false);
+    setWeekIndex(-1);
+    setSelectedDay(null);
+    setToday(dateKey(now));
+    setSaveMessage("");
     setView("log");
   };
 
@@ -175,18 +242,24 @@ export default function Home() {
     setView("log");
     setFlash(key);
     setTimeout(() => {
-      rowRefs.current[key]?.scrollIntoView({ block: "center", behavior: "smooth" });
+      rowRefs.current[key]?.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      });
       setTimeout(() => setFlash(null), 1300);
     }, 60);
   };
 
   if (!store) {
     return (
-      <main className="mx-auto max-w-xl px-4 py-10 sm:px-5">
+      <main
+        className="app-shell mx-auto max-w-2xl px-5 py-10 sm:px-8"
+        aria-label="Loading workout log"
+      >
         <div className="h-8 w-36 animate-pulse rounded bg-panel" />
         <div className="mt-8 space-y-3">
           {[0, 1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="h-12 animate-pulse rounded-xl bg-panel" />
+            <div key={i} className="h-16 animate-pulse rounded-2xl bg-panel" />
           ))}
         </div>
       </main>
@@ -194,363 +267,578 @@ export default function Home() {
   }
 
   const progress: Partial<Record<MuscleKey, number>> = {};
-  // Uncapped past 1 so the body keeps brightening beyond 10 sets (2 = ceiling).
-  for (const m of MUSCLES) progress[m.key] = Math.min((counts[m.key] ?? 0) / FLOOR, 2);
+  for (const muscle of MUSCLES)
+    progress[muscle.key] = (counts[muscle.key] ?? 0) / FLOOR;
+  const dates = week ? loggedDates(week) : [];
+  const olderSets = week ? undatedSets(week) : 0;
+  const musclesAtGoal = MUSCLES.filter(
+    (muscle) => (counts[muscle.key] ?? 0) >= FLOOR,
+  ).length;
+  const savedDate = dates.includes(selectedDate);
 
   return (
-    <main className="mx-auto max-w-xl px-4 pb-24 pt-6 sm:px-5 sm:pt-8">
-      {/* Header */}
-      <header className="flex items-start justify-between gap-3">
-        <div>
-          <Link href="/" aria-label="tensets home" className="inline-block">
-            <h1 className="wordmark text-2xl lowercase text-ink transition-opacity hover:opacity-80">
-              ten<span style={{ color: "var(--accent)" }}>sets</span>
-            </h1>
-          </Link>
-          <p className="mt-1 font-mono text-[11px] uppercase tracking-wider text-sub">
-            {store.week
-              ? `week of ${fmtDay(store.week.startedAt)} · day ${dayOf(store.week.startedAt)}`
-              : "no week running"}
-          </p>
-        </div>
+    <main className="app-shell mx-auto max-w-2xl px-5 pb-20 pt-6 sm:px-8 sm:pt-9">
+      <header className="flex items-center justify-between gap-3">
+        <Link href="/" aria-label="tensets home" className="inline-block">
+          <span className="wordmark text-xl lowercase text-ink sm:text-2xl">
+            ten<span className="text-accent">sets</span>
+          </span>
+          <p className="mt-1.5 text-[11px] text-sub">Your daily practice.</p>
+        </Link>
         <div className="flex items-center gap-2">
           <Link
-            href="/morning"
-            title="Morning routine — nine boxes, every day"
-            className="rounded-full border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-sub transition-colors hover:text-ink"
-          >
-            ☀ am
-          </Link>
-          <Link
             href="/account"
-            title={session ? (sync === "error" ? "Sync hit an error — tap for details" : "Synced to your account") : "Sign in to sync across devices"}
             aria-label="Account & sync"
-            className="flex size-9 items-center justify-center rounded-full border border-line font-mono text-[13px] transition-colors hover:text-ink"
-            style={{ color: session ? (sync === "error" ? "var(--warn)" : "var(--good)") : "var(--sub)" }}
+            title={
+              session
+                ? sync === "error"
+                  ? "Sync needs attention"
+                  : "Account & sync"
+                : "Sign in to sync across devices"
+            }
+            className="flex size-10 items-center justify-center rounded-full border border-line bg-panel text-sub hover:text-ink"
           >
-            ☁
-          </Link>
-          {store.history.length > 0 && (
-            <button
-              onClick={() => setView((v) => (v === "history" ? "log" : "history"))}
-              title="Past weeks"
-              aria-label="Week archive"
-              className="flex size-9 items-center justify-center rounded-full border border-line font-mono text-[13px] text-sub transition-colors hover:text-ink"
-              style={view === "history" ? { background: "var(--ink)", color: "var(--bg)" } : undefined}
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              aria-hidden="true"
             >
-              ≡
-            </button>
-          )}
+              <circle cx="12" cy="8" r="3.5" />
+              <path d="M5 21v-2a7 7 0 0 1 14 0v2" />
+            </svg>
+          </Link>
           <button
-            onClick={() => setStore((s) => (s ? { ...s, theme: s.theme === "dark" ? "light" : "dark" } : s))}
-            title={store.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            aria-label="Toggle light / dark"
-            className="flex size-9 items-center justify-center rounded-full border border-line text-sub transition-colors hover:text-ink"
+            onClick={() =>
+              setStore((current) =>
+                current
+                  ? {
+                      ...current,
+                      theme: current.theme === "dark" ? "light" : "dark",
+                    }
+                  : current,
+              )
+            }
+            aria-label={
+              store.theme === "dark"
+                ? "Switch to light mode"
+                : "Switch to dark mode"
+            }
+            className="flex size-10 items-center justify-center rounded-full border border-line bg-panel text-sub hover:text-ink"
           >
             {store.theme === "dark" ? "☾" : "☀"}
           </button>
-          {store.week &&
-            (confirmNew ? (
-              <span className="flex items-center gap-1.5">
-                <button
-                  onClick={startWeek}
-                  className="rounded-full px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-white"
-                  style={{ background: "var(--accent)" }}
-                >
-                  archive &amp; start
-                </button>
-                <button
-                  onClick={() => setConfirmNew(false)}
-                  className="rounded-full border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-sub"
-                >
-                  keep going
-                </button>
-              </span>
-            ) : (
-              <button
-                onClick={() => setConfirmNew(true)}
-                title="Archive this week and start fresh"
-                className="rounded-full border border-line px-3 py-2 font-mono text-[11px] uppercase tracking-wider text-sub transition-colors hover:text-ink"
-              >
-                new week
-              </button>
-            ))}
         </div>
       </header>
 
-      {view === "history" ? (
-        /* The archive — every closed week, newest first. */
-        <section className="mt-6 space-y-4">
-          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-faint">
-            archive · {store.history.length} week{store.history.length === 1 ? "" : "s"}
+      <AppNav active="sets" />
+
+      <div className="mb-6 mt-8 flex items-end justify-between gap-4">
+        <div>
+          <p className="page-kicker">A little stronger, every week</p>
+          <h1 className="page-title mt-2">Your training.</h1>
+          <p className="mt-2 text-sm leading-relaxed text-sub">
+            Ten sets. Each muscle. Your own pace.
           </p>
-          {store.history.map((w, wi) => {
-            const parts = MUSCLES.filter((m) => (w.counts[m.key] ?? 0) > 0);
-            const hit = MUSCLES.filter((m) => (w.counts[m.key] ?? 0) >= FLOOR).length;
-            return (
-              <div key={wi} className="rounded-xl border border-line p-4" style={{ background: "var(--panel)" }}>
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="text-sm font-medium text-ink">
-                    {fmtDay(w.startedAt)}
-                    {w.endedAt ? ` → ${fmtDay(w.endedAt)}` : ""}
-                  </p>
-                  <p className="font-mono text-[11px] text-sub">
-                    <span className={hit > 0 ? "text-good" : ""}>{hit}</span> part{hit === 1 ? "" : "s"} at {FLOOR}
-                  </p>
-                </div>
-                {parts.length === 0 ? (
-                  <p className="mt-2 font-mono text-[11px] text-faint">nothing logged</p>
-                ) : (
-                  <div className="mt-2.5 flex flex-wrap gap-1.5">
-                    {parts.map((m) => {
-                      const n = w.counts[m.key] ?? 0;
-                      return (
-                        <span
-                          key={m.key}
-                          className="rounded-full border border-line px-2 py-0.5 font-mono text-[11px]"
-                          style={{ color: n >= FLOOR ? "var(--good)" : "var(--sub)" }}
-                        >
-                          {m.name} {n}
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        </div>
+        {store.week && (
+          <button
+            onClick={() => setConfirmNew((value) => !value)}
+            className="shrink-0 rounded-full border border-line px-3.5 py-2.5 text-xs font-medium text-sub hover:text-ink"
+          >
+            New week <span aria-hidden="true">↗</span>
+          </button>
+        )}
+      </div>
+
+      {confirmNew && (
+        <section
+          className="mb-5 rounded-2xl border border-line bg-panel p-4"
+          aria-label="Start a new week"
+        >
+          <p className="text-sm font-medium text-ink">
+            Ready for a fresh week?
+          </p>
+          <p className="mt-1 text-sm text-sub">
+            This week moves to your archive. You can still edit every day.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              onClick={startWeek}
+              className="rounded-full bg-accent px-4 py-2 text-xs font-semibold text-white"
+            >
+              Archive &amp; start
+            </button>
+            <button
+              onClick={() => setConfirmNew(false)}
+              className="rounded-full border border-line px-4 py-2 text-xs text-sub"
+            >
+              Keep this week
+            </button>
+          </div>
         </section>
-      ) : !store.week ? (
-        /* No week yet — the app waits for you, it never resets itself. */
-        <div className="mt-10 flex flex-col items-center rounded-2xl border border-dashed border-line px-6 py-12 text-center">
-          <p className="wordmark text-lg text-ink">
-            10<span style={{ color: "var(--accent)" }}>/wk</span>
-          </p>
-          <p className="mt-3 max-w-sm text-sm text-sub">
-            Ten sets to failure per body part per week is where growth starts. Start a week, log every set with one
-            tap, and close it out when you&apos;re done — it only rolls over when you say so.
+      )}
+
+      <div className="segmented-control mb-6 flex" aria-label="Workout view">
+        {(["log", "body", "history"] as const).map((option) => (
+          <button
+            key={option}
+            onClick={() => setView(option)}
+            aria-pressed={view === option}
+            className="flex-1 px-3 py-2.5 text-sm font-medium"
+          >
+            {option === "log"
+              ? "Daily log"
+              : option === "body"
+                ? "Body map"
+                : "History"}
+          </button>
+        ))}
+      </div>
+
+      {storageError || sync === "error" ? (
+        <p
+          role="alert"
+          className="mb-5 rounded-xl border border-warn/30 bg-panel p-3 text-sm text-warn"
+        >
+          {storageError
+            ? "This device couldn’t save your latest change. Keep this page open and free up browser storage."
+            : "Your changes are saved on this device. Cloud sync needs attention in your account."}
+        </p>
+      ) : null}
+
+      {view === "history" ? (
+        <section className="space-y-4">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-lg font-semibold text-ink">Past weeks</h2>
+            <p className="text-xs text-sub">{store.history.length} archived</p>
+          </div>
+          {store.history.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-line p-8 text-center">
+              <p className="text-sm font-medium text-ink">
+                Your history starts here.
+              </p>
+              <p className="mt-2 text-sm leading-relaxed text-sub">
+                When you start your next week, this one will appear here. Its
+                days will always stay editable.
+              </p>
+              {store.week && (
+                <button
+                  onClick={() => chooseWeek(-1)}
+                  className="mt-4 text-sm font-medium text-accent"
+                >
+                  Back to this week →
+                </button>
+              )}
+            </div>
+          ) : (
+            store.history.map((entry, index) => {
+              const parts = MUSCLES.filter(
+                (muscle) => (entry.counts[muscle.key] ?? 0) > 0,
+              );
+              const hit = MUSCLES.filter(
+                (muscle) => (entry.counts[muscle.key] ?? 0) >= FLOOR,
+              ).length;
+              return (
+                <article
+                  key={`${entry.startedAt}-${index}`}
+                  className="rounded-2xl border border-line bg-panel p-5"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-medium text-ink">
+                        {fmtWeekRange(entry)}
+                      </h3>
+                      <p className="mt-1 text-xs text-sub">
+                        {loggedDates(entry).length} logged days · {hit} muscles
+                        at {FLOOR} sets
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => chooseWeek(index)}
+                      className="shrink-0 rounded-full border border-line px-3 py-2 text-xs font-medium text-ink"
+                    >
+                      Edit days <span aria-hidden="true">↗</span>
+                    </button>
+                  </div>
+                  {parts.length > 0 ? (
+                    <div className="mt-4 flex flex-wrap gap-1.5">
+                      {parts.map((muscle) => (
+                        <span
+                          key={muscle.key}
+                          className="rounded-full border border-line px-2.5 py-1 text-xs text-sub"
+                        >
+                          {muscle.name}{" "}
+                          <span
+                            className={
+                              (entry.counts[muscle.key] ?? 0) >= FLOOR
+                                ? "text-good"
+                                : "text-ink"
+                            }
+                          >
+                            {entry.counts[muscle.key]}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-sub">
+                      No sets logged. You can still add a missed workout.
+                    </p>
+                  )}
+                </article>
+              );
+            })
+          )}
+        </section>
+      ) : !week ? (
+        <section className="rounded-3xl border border-line bg-panel px-6 py-12 text-center">
+          <span className="wordmark text-4xl text-accent">10</span>
+          <h2 className="mt-5 text-xl font-semibold text-ink">
+            Make this your first week.
+          </h2>
+          <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-sub">
+            Log sets as you go, or come back and fill in a day. Your week rolls
+            over when you decide.
           </p>
           <button
             onClick={startWeek}
-            className="mt-6 rounded-full px-6 py-3 font-mono text-xs uppercase tracking-wider text-white transition-transform active:scale-95"
-            style={{ background: "var(--accent)" }}
+            className="mt-6 rounded-full bg-accent px-6 py-3 text-sm font-semibold text-white"
           >
-            start my week
+            Start my week →
           </button>
-        </div>
+        </section>
       ) : (
         <>
-          {/* View toggle */}
-          <div className="mt-6 flex items-center justify-between">
-            <div className="flex overflow-hidden rounded-full border border-line">
-              {(["log", "body"] as const).map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className="px-4 py-2 font-mono text-[11px] uppercase tracking-wider transition-colors"
-                  style={{
-                    background: view === v ? "var(--ink)" : "transparent",
-                    color: view === v ? "var(--bg)" : "var(--sub)",
-                  }}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-            {view === "body" && (
-              <button
-                onClick={() => setStore((s) => (s ? { ...s, sex: s.sex === "m" ? "f" : "m" } : s))}
-                title="Switch figure"
-                className="rounded-full border border-line px-3.5 py-2 font-mono text-[11px] uppercase tracking-wider text-sub hover:text-ink"
+          <section className="mb-5 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+            <label className="min-w-0">
+              <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.16em] text-sub">
+                Training week
+              </span>
+              <select
+                aria-label="Training week"
+                value={weekIndex}
+                onChange={(event) => chooseWeek(Number(event.target.value))}
+                className="w-full max-w-[240px] cursor-pointer rounded-lg border border-line bg-panel py-2 pl-3 pr-7 text-sm font-medium text-ink"
               >
-                {store.sex === "m" ? "♂" : "♀"}
-              </button>
-            )}
-          </div>
+                {store.week && (
+                  <option value={-1}>
+                    Current · {fmtDay(store.week.startedAt)}
+                  </option>
+                )}
+                {store.history.map((entry, index) => (
+                  <option key={`${entry.startedAt}-${index}`} value={index}>
+                    {fmtWeekRange(entry)} · archived
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-right text-xs text-sub">
+              <span className="text-lg font-semibold tabular-nums text-ink">
+                {musclesAtGoal}
+                <span className="text-sm font-normal text-sub">
+                  {" "}
+                  / {MUSCLES.length}
+                </span>
+              </span>
+              <span className="mt-0.5 block">muscles at 10 sets</span>
+            </p>
+          </section>
+
+          {weekIndex >= 0 && (
+            <div className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-accent/20 bg-accent/5 px-4 py-3">
+              <p className="text-xs leading-relaxed text-sub">
+                Editing an archived week. Its totals update with your changes.
+              </p>
+              {store.week && (
+                <button
+                  onClick={() => chooseWeek(-1)}
+                  className="shrink-0 text-xs font-medium text-accent"
+                >
+                  Current week →
+                </button>
+              )}
+            </div>
+          )}
 
           {view === "body" ? (
-            <section className="mt-4">
-              <Body3D sex={store.sex} light={store.theme === "light"} progress={progress} onPick={jumpTo} />
-              <p className="mt-2 text-center font-mono text-[10px] uppercase tracking-wider text-faint">
-                drag to spin · ember → molten gold at 10 sets → white-hot at 20 · tap a muscle for its row
-              </p>
+            <section>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-sm text-sub">Your weekly work, mapped.</p>
+                <button
+                  onClick={() =>
+                    setStore((current) =>
+                      current
+                        ? { ...current, sex: current.sex === "m" ? "f" : "m" }
+                        : current,
+                    )
+                  }
+                  className="rounded-full border border-line bg-panel px-3.5 py-2 text-xs text-sub"
+                  aria-label="Switch body figure"
+                >
+                  {store.sex === "m" ? "Male figure" : "Female figure"}{" "}
+                  <span aria-hidden="true">⇄</span>
+                </button>
+              </div>
+              <Body3D
+                sex={store.sex}
+                light={store.theme === "light"}
+                progress={progress}
+                onPick={jumpTo}
+              />
             </section>
           ) : (
             <>
-              {/* The week, day by day — saved days as chips, today's
-                  unsaved sets beside the save button. */}
-              <section className="mt-6">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-faint">day by day</p>
+              <DayPicker
+                value={selectedDate}
+                onChange={(date) => {
+                  setSelectedDay(date === today && weekIndex < 0 ? null : date);
+                  setSaveMessage("");
+                }}
+                today={today}
+                min={bounds?.min}
+                max={bounds?.max}
+                caption="Workout day"
+                summary={`${totalSets(dayCounts)} ${totalSets(dayCounts) === 1 ? "set" : "sets"} logged`}
+              />
+
+              <section className="day-log-panel mt-4 rounded-2xl border border-line bg-panel p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-medium text-ink">
+                      {selectedDate === today
+                        ? "Today’s workout"
+                        : `Workout · ${fmtDay(selectedDate)}`}
+                    </h2>
+                    <p className="mt-1 text-xs leading-relaxed text-sub">
+                      {dayInWeek
+                        ? "Add or remove sets for this day. Changes save automatically."
+                        : "Choose a date within this training week to edit its sets."}
+                    </p>
+                  </div>
                   <button
                     onClick={saveDay}
-                    disabled={!store.week.pending || totalSets(store.week.pending.counts) === 0}
-                    title="File today's sets onto the chart"
-                    className="rounded-full px-3.5 py-1.5 font-mono text-[11px] uppercase tracking-wider transition-transform active:scale-95 disabled:opacity-40"
-                    style={
-                      daySaved
-                        ? { background: "var(--good)", color: "var(--bg)" }
-                        : { background: "var(--accent)", color: "#fff" }
-                    }
+                    disabled={!dayInWeek}
+                    className="shrink-0 rounded-full border border-line px-3 py-2 text-xs font-medium text-ink disabled:opacity-40"
                   >
-                    {daySaved
-                      ? "day saved ✓"
-                      : store.week.pending && totalSets(store.week.pending.counts) > 0
-                        ? `save day · ${totalSets(store.week.pending.counts)}`
-                        : "save day"}
+                    {savedDate
+                      ? "Save day"
+                      : totalSets(dayCounts) === 0
+                        ? "Log rest day"
+                        : "Save day"}
                   </button>
                 </div>
-                {(store.week.days ?? []).length === 0 && !store.week.pending ? (
-                  <p className="mt-2.5 font-mono text-[11px] text-faint">
-                    no days on the chart yet — log sets, then save the day
-                  </p>
-                ) : (
-                  <div className="mt-2.5 flex flex-wrap gap-1.5">
-                    {(store.week.days ?? []).map((d) => (
-                      <span
-                        key={d.date}
-                        title={MUSCLES.filter((m) => (d.counts[m.key] ?? 0) > 0)
-                          .map((m) => `${m.name} ${d.counts[m.key]}`)
-                          .join(" · ")}
-                        className="rounded-full border border-line px-2.5 py-1 font-mono text-[11px] text-sub"
-                        style={{ background: "var(--panel)" }}
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="mt-2 min-h-4 text-xs text-good"
+                >
+                  {storageError
+                    ? ""
+                    : saveMessage ||
+                      (savedDate
+                        ? totalSets(dayCounts) === 0
+                          ? "Rest day logged"
+                          : "Saved on this device"
+                        : "")}
+                </p>
+                {dates.length > 0 && (
+                  <div
+                    className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3"
+                    aria-label="Logged workout days"
+                  >
+                    {dates.map((date) => (
+                      <button
+                        key={date}
+                        onClick={() => {
+                          setSelectedDay(
+                            date === today && weekIndex < 0 ? null : date,
+                          );
+                          setSaveMessage("");
+                        }}
+                        aria-pressed={date === selectedDate}
+                        className={`rounded-full border px-2.5 py-1.5 text-xs transition-colors ${date === selectedDate ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-sub hover:text-ink"}`}
                       >
-                        {fmtDayChip(d.date)} <span className="text-good">{totalSets(d.counts)}</span>
-                      </span>
+                        {fmtChip(date)}{" "}
+                        <span className="ml-1 tabular-nums">
+                          {totalSets(countsForDay(week, date)) || "rest"}
+                        </span>
+                      </button>
                     ))}
-                    {store.week.pending && totalSets(store.week.pending.counts) > 0 && (
-                      <span
-                        title="Not filed yet — tap save day"
-                        className="rounded-full border border-dashed px-2.5 py-1 font-mono text-[11px]"
-                        style={{ borderColor: "var(--accent)", color: "var(--accent)" }}
-                      >
-                        {store.week.pending.date === todayKey() ? "today" : fmtDayChip(store.week.pending.date)}{" "}
-                        {totalSets(store.week.pending.counts)} unsaved
-                      </span>
-                    )}
                   </div>
                 )}
               </section>
 
-              <section className="mt-6 space-y-7">
-              {GROUPS.map((group) => (
-                <div key={group}>
-                  <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.2em] text-faint">{group}</h2>
-                  <div className="overflow-hidden rounded-xl border border-line">
-                    {MUSCLES.filter((m) => m.group === group).map((m, i) => {
-                      const n = counts[m.key] ?? 0;
-                      const over = n > FLOOR;
-                      const scale = over ? CEILING : FLOOR;
-                      const pct = Math.min(n / scale, 1) * 100;
-                      const last = lastWeek[m.key] ?? 0;
-                      return (
-                        <div
-                          key={m.key}
-                          ref={(el) => {
-                            rowRefs.current[m.key] = el;
-                          }}
-                          className={`relative flex items-center gap-3 px-3.5 py-3 sm:px-4 ${
-                            i > 0 ? "border-t border-line" : ""
-                          } ${flash === m.key ? "row-flash" : ""}`}
-                          style={{ background: "var(--panel)" }}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <p className="truncate text-sm font-medium text-ink">{m.name}</p>
-                              <p className="font-mono text-xs text-sub">
-                                <span className={n >= FLOOR ? "text-good" : "text-ink"}>{n}</span>
-                                <span className="text-faint">/{over ? CEILING : FLOOR}</span>
-                                {last > 0 && <span className="ml-2 hidden text-faint sm:inline">last wk {last}</span>}
-                              </p>
-                            </div>
-                            {/* the bar: 0→10; past 10 it re-scales to 0→20 with a marker at 10 */}
+              {olderSets > 0 && (
+                <p className="mt-3 text-xs leading-relaxed text-sub">
+                  {olderSets} earlier sets have no recorded day. They’re still
+                  included in your weekly totals.
+                </p>
+              )}
+
+              <div className="mb-3 mt-7 flex items-center justify-between">
+                <p className="page-kicker">Sets by muscle</p>
+                <p className="text-[11px] text-sub">
+                  Week progress <span className="ml-4">Selected day</span>
+                </p>
+              </div>
+              <section className="space-y-6" aria-label="Sets by muscle">
+                {GROUPS.map((group) => (
+                  <div key={group}>
+                    <h2 className="mb-2 pl-1 text-xs font-semibold uppercase tracking-[0.12em] text-sub">
+                      {group}
+                    </h2>
+                    <div className="overflow-hidden rounded-2xl border border-line bg-panel">
+                      {MUSCLES.filter((muscle) => muscle.group === group).map(
+                        (muscle, index) => {
+                          const weekly = counts[muscle.key] ?? 0;
+                          const daily = dayCounts[muscle.key] ?? 0;
+                          const over = weekly > FLOOR;
+                          const scale = over ? CEILING : FLOOR;
+                          const previous = lastWeek[muscle.key] ?? 0;
+                          return (
                             <div
-                              className="relative mt-2 h-1.5 overflow-hidden rounded-full"
-                              style={{ background: "var(--line)" }}
+                              key={muscle.key}
+                              ref={(element) => {
+                                rowRefs.current[muscle.key] = element;
+                              }}
+                              className={`relative flex items-center gap-4 px-4 py-4 ${index > 0 ? "border-t border-line" : ""} ${flash === muscle.key ? "row-flash" : ""}`}
                             >
-                              <div
-                                className="h-full rounded-full transition-all duration-300"
-                                style={{
-                                  width: `${pct}%`,
-                                  background:
-                                    n >= CEILING
-                                      ? "var(--warn)"
-                                      : n >= FLOOR
-                                        ? "var(--good)"
-                                        : `linear-gradient(90deg, var(--accent-2), var(--accent))`,
-                                  boxShadow: n >= FLOOR && n < CEILING ? "0 0 8px rgba(52,211,153,.5)" : undefined,
-                                }}
-                              />
-                              {over && (
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-baseline justify-between gap-2">
+                                  <h3 className="truncate text-sm font-medium text-ink">
+                                    {muscle.name}
+                                  </h3>
+                                  <span
+                                    className={`shrink-0 text-[11px] tabular-nums ${weekly >= FLOOR ? "text-good" : "text-sub"}`}
+                                  >
+                                    <span className="font-semibold">
+                                      {weekly}
+                                    </span>
+                                    <span className="text-sub">
+                                      {" "}
+                                      / {scale} wk
+                                    </span>
+                                  </span>
+                                </div>
                                 <div
-                                  className="absolute top-0 h-full w-px"
-                                  style={{ left: "50%", background: "var(--bg)" }}
-                                  title="10 — the growth floor"
-                                />
-                              )}
+                                  className="relative mt-2 h-1 overflow-hidden rounded-full bg-line"
+                                  role="progressbar"
+                                  aria-label={`${muscle.name} weekly sets`}
+                                  aria-valuenow={weekly}
+                                  aria-valuemin={0}
+                                  aria-valuemax={Math.max(scale, weekly)}
+                                >
+                                  <div
+                                    className="h-full rounded-full transition-all duration-300"
+                                    style={{
+                                      width: `${Math.min(weekly / scale, 1) * 100}%`,
+                                      background:
+                                        weekly >= CEILING
+                                          ? "var(--warn)"
+                                          : weekly >= FLOOR
+                                            ? "var(--good)"
+                                            : "var(--accent)",
+                                    }}
+                                  />
+                                  {over && (
+                                    <div
+                                      className="absolute top-0 h-full w-px bg-panel"
+                                      style={{ left: "50%" }}
+                                    />
+                                  )}
+                                </div>
+                                {weekly >= CEILING ? (
+                                  <p className="mt-1.5 text-[10px] text-warn">
+                                    20+ sets · diminishing returns
+                                  </p>
+                                ) : previous > 0 ? (
+                                  <p className="mt-1.5 text-[10px] text-sub">
+                                    Last week {previous}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <button
+                                  aria-label={`Remove a set from ${muscle.name} on ${selectedDate}`}
+                                  onClick={() => bump(muscle.key, -1)}
+                                  disabled={!dayInWeek || daily === 0}
+                                  className="flex size-9 items-center justify-center rounded-full border border-line text-lg text-sub hover:text-ink disabled:opacity-25"
+                                >
+                                  −
+                                </button>
+                                <span
+                                  className="w-6 text-center text-base font-semibold tabular-nums text-ink"
+                                  aria-label={`${muscle.name} selected day sets`}
+                                >
+                                  {daily}
+                                </span>
+                                <button
+                                  aria-label={`Add a set to ${muscle.name} on ${selectedDate}`}
+                                  onClick={() => bump(muscle.key, 1)}
+                                  disabled={!dayInWeek}
+                                  className="flex size-9 items-center justify-center rounded-full bg-accent text-lg text-white transition-transform active:scale-90 disabled:opacity-25"
+                                >
+                                  +
+                                </button>
+                              </div>
                             </div>
-                            {n >= CEILING && (
-                              <p className="mt-1 font-mono text-[10px] text-warn">past 20 — diminishing returns</p>
-                            )}
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1.5">
-                            <button
-                              aria-label={`Remove a set from ${m.name}`}
-                              onClick={() => bump(m.key, -1)}
-                              disabled={n === 0}
-                              className="flex size-9 items-center justify-center rounded-full border border-line font-mono text-sub transition-colors hover:text-ink disabled:opacity-30"
-                            >
-                              −
-                            </button>
-                            <button
-                              aria-label={`Log one set to failure on ${m.name}`}
-                              title="+1 set to failure"
-                              onClick={() => bump(m.key, 1)}
-                              className="flex size-9 items-center justify-center rounded-full font-mono font-bold transition-transform active:scale-90"
-                              style={{ background: "var(--accent)", color: "#fff" }}
-                            >
-                              +
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+                          );
+                        },
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
               </section>
             </>
           )}
         </>
       )}
 
-      <footer className="mt-12 border-t border-line pt-5">
-        <p className="text-xs leading-relaxed text-faint">
-          The theory, whole: a muscle grows on ~10 sets to failure a week — fewer and it maintains, past ~20 the
-          returns diminish. Weeks are yours to open and close. Your log saves on this device — sign in and it
-          follows you everywhere.
+      <footer className="mt-10 border-t border-line pt-5">
+        <p className="text-xs leading-relaxed text-sub">
+          Aim for around 10 hard sets per muscle each week. Your weeks start and
+          finish when you decide.{" "}
+          {session ? (
+            "Signed in for sync across devices."
+          ) : (
+            <>
+              Saved on this device.{" "}
+              <Link href="/account" className="text-accent hover:underline">
+                Sign in to sync.
+              </Link>
+            </>
+          )}
         </p>
-        <p className="mt-2 text-xs leading-relaxed text-faint">
-          The research behind the numbers:{" "}
-          <a
-            href="https://pubmed.ncbi.nlm.nih.gov/27433992/"
-            target="_blank"
-            rel="noreferrer"
-            className="underline decoration-dotted underline-offset-2 hover:text-sub"
-          >
-            Schoenfeld, Ogborn &amp; Krieger 2017
-          </a>{" "}
-          (10+ weekly sets per muscle drove the most growth) and{" "}
-          <a
-            href="https://pubmed.ncbi.nlm.nih.gov/35291645/"
-            target="_blank"
-            rel="noreferrer"
-            className="underline decoration-dotted underline-offset-2 hover:text-sub"
-          >
-            Baz-Valle et al. 2022
-          </a>{" "}
-          (12–20 sets as the upper productive range).
-        </p>
+        <details className="mt-3 text-xs text-sub">
+          <summary className="cursor-pointer">
+            The thinking behind ten sets
+          </summary>
+          <p className="mt-2 leading-relaxed">
+            The weekly target is informed by research on training volume:{" "}
+            <a
+              href="https://pubmed.ncbi.nlm.nih.gov/27433992/"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2"
+            >
+              Schoenfeld, Ogborn &amp; Krieger 2017
+            </a>{" "}
+            and{" "}
+            <a
+              href="https://pubmed.ncbi.nlm.nih.gov/35291645/"
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2"
+            >
+              Baz-Valle et al. 2022
+            </a>
+            .
+          </p>
+        </details>
       </footer>
     </main>
   );

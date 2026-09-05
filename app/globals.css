@@ -2,29 +2,31 @@
 
 /* Dark is the default; [data-theme="light"] swaps the palette. */
 :root {
-  --bg: #07070b;
-  --panel: #0e0e16;
-  --line: #1d1d2b;
-  --ink: #e8e8f2;
-  --sub: #8b8ba3;
-  --faint: #4c4c63;
-  --accent: #7c5cff;
-  --accent-2: #4c9eff;
-  --good: #34d399;
-  --warn: #f59e0b;
+  color-scheme: dark;
+  --bg: #111413;
+  --panel: #1a1e1c;
+  --line: #2e3531;
+  --ink: #f3f2e9;
+  --sub: #b0b9b1;
+  --faint: #849188;
+  --accent: #f0876b;
+  --accent-2: #d96753;
+  --good: #a4c99a;
+  --warn: #e8ba71;
 }
 
 :root[data-theme="light"] {
-  --bg: #f7f7fb;
-  --panel: #ffffff;
-  --line: #e2e2ee;
-  --ink: #17171f;
-  --sub: #5b5b73;
-  --faint: #a0a0b8;
-  --accent: #6a48f2;
-  --accent-2: #2f7fe8;
-  --good: #0e9f6e;
-  --warn: #d97706;
+  color-scheme: light;
+  --bg: #f5f4ee;
+  --panel: #fffefa;
+  --line: #dedfd4;
+  --ink: #252e27;
+  --sub: #5c6a60;
+  --faint: #6e7b70;
+  --accent: #b94a34;
+  --accent-2: #d66c4f;
+  --good: #497341;
+  --warn: #9c660f;
 }
 
 @theme inline {
@@ -51,20 +53,272 @@ body {
   color: var(--ink);
   font-family: var(--font-sans, ui-sans-serif);
   -webkit-font-smoothing: antialiased;
-  transition: background-color 0.25s ease, color 0.25s ease;
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease;
+}
+
+button,
+a,
+input {
+  -webkit-tap-highlight-color: transparent;
+}
+button:not(:disabled),
+a {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+button {
+  touch-action: manipulation;
+}
+button.bg-accent.text-white,
+button[style*="var(--accent)"][style*="background"].text-white {
+  color: var(--bg);
+}
+
+.app-shell {
+  max-width: 42rem;
+}
+.page-kicker {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.page-title {
+  font-size: clamp(1.65rem, 5vw, 2rem);
+  line-height: 1.15;
+  font-weight: 500;
+  letter-spacing: -0.055em;
+  color: var(--ink);
+}
+.app-nav {
+  display: flex;
+  gap: 6px;
+  margin-top: 28px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 16px;
+}
+.app-nav a {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  padding: 12px 8px;
+  border-radius: 11px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--sub);
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+.app-nav a[aria-current="page"] {
+  background: var(--ink);
+  color: var(--bg);
+  box-shadow: 0 2px 8px #00000010;
+}
+.app-nav svg {
+  width: 20px;
+  height: 20px;
+}
+.app-nav a:hover:not([aria-current]) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.day-picker {
+  margin-top: 22px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 18px;
+  background: linear-gradient(
+    130deg,
+    color-mix(in srgb, var(--panel) 96%, var(--accent)),
+    var(--panel)
+  );
+}
+.day-picker-topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 24px;
+  gap: 12px;
+}
+.today-badge {
+  padding: 3px 9px;
+  border-radius: 6px;
+  color: var(--good);
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--good) 10%, transparent);
+}
+.today-button {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+}
+.today-button span {
+  margin-left: 3px;
+}
+.day-picker-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 19px 0 23px;
+}
+.date-arrow {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  color: var(--sub);
+  transition:
+    color 0.2s,
+    background 0.2s;
+}
+.date-arrow:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--line);
+}
+.date-arrow:disabled {
+  opacity: 0.25;
+}
+.date-arrow svg {
+  width: 19px;
+  height: 19px;
+}
+.day-picker-date {
+  text-align: center;
+}
+.selected-day-title {
+  color: var(--ink);
+  font-size: 28px;
+  line-height: 1.25;
+  letter-spacing: -0.055em;
+  font-weight: 500;
+}
+.selected-day-subtitle {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--sub);
+}
+.day-picker-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+.calendar-field {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--sub);
+  font-size: 11px;
+  min-width: 0;
+}
+.calendar-field > svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+.calendar-field input {
+  background: transparent;
+  border: 0;
+  color: var(--sub);
+  font: inherit;
+  min-width: 0;
+  max-width: 137px;
+}
+.day-picker-summary {
+  font-size: 11px;
+  color: var(--sub);
+  text-align: right;
+}
+.segmented-control {
+  display: flex;
+  width: 100%;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.segmented-control button {
+  padding: 8px 15px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--sub);
+}
+.segmented-control button[aria-pressed="true"],
+.segmented-control button[data-active="true"] {
+  color: var(--ink);
+  background: var(--line);
+}
+.day-log-panel {
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
 }
 
 /* The tensets wordmark — same futuristic display face family as cortex. */
 .wordmark {
   font-family: var(--font-orbitron), var(--font-geist-mono), monospace;
-  letter-spacing: 0.08em;
+  letter-spacing: -0.025em;
 }
 
 /* Row flash when jumped to from the body view. */
 @keyframes tensets-flash {
-  0% { background-color: color-mix(in srgb, var(--accent) 22%, transparent); }
-  100% { background-color: transparent; }
+  0% {
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
 }
 .row-flash {
   animation: tensets-flash 1.2s ease-out 1;
+}
+
+@media (max-width: 380px) {
+  .day-picker {
+    padding: 14px;
+  }
+  .day-picker-bottom {
+    gap: 8px;
+  }
+  .calendar-field > svg {
+    display: none;
+  }
+  .selected-day-title {
+    font-size: 25px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
